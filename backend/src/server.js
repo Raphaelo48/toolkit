@@ -53,13 +53,15 @@ function generateRoomCode() {
 }
 
 function broadcast(roomId, message) {
-    const set = sockets.get(String(roomId));
+    const clients = sockets.get(String(roomId));
 
-    if (!set) return;
+    if (!clients) {
+        return;
+    }
 
     const data = JSON.stringify(message);
 
-    for (const ws of set) {
+    for (const ws of clients) {
         if (ws.readyState === 1) {
             ws.send(data);
         }
@@ -72,7 +74,7 @@ async function getRoomState(roomId) {
         [roomId]
     );
 
-    if (!result.rowCount) {
+    if (result.rowCount === 0) {
         return {
             state: {},
             updated_at: null
@@ -109,7 +111,7 @@ app.get('/api/health', async (_req, res) => {
             database: 'connected'
         });
     } catch (error) {
-        console.error('Health check error:', error);
+        console.error('Health error:', error);
 
         res.status(503).json({
             success: false,
@@ -142,7 +144,9 @@ app.post('/api/campaigns', async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        /* Создаём пользователя-мастера */
+        /*
+         * Создаём пользователя-мастера
+         */
 
         const userResult = await client.query(
             'INSERT INTO users (username) VALUES ($1) RETURNING *',
@@ -151,12 +155,15 @@ app.post('/api/campaigns', async (req, res) => {
 
         const user = userResult.rows[0];
 
-        /* Создаём кампанию */
+        /*
+         * Создаём кампанию
+         */
 
         const campaignResult = await client.query(
             'INSERT INTO campaigns ' +
             '(name, description, master_user_id) ' +
-            'VALUES ($1, $2, $3) RETURNING *',
+            'VALUES ($1, $2, $3) ' +
+            'RETURNING *',
             [
                 name,
                 description,
@@ -166,7 +173,9 @@ app.post('/api/campaigns', async (req, res) => {
 
         const campaign = campaignResult.rows[0];
 
-        /* Добавляем мастера в кампанию */
+        /*
+         * Добавляем мастера в кампанию
+         */
 
         await client.query(
             'INSERT INTO campaign_members ' +
@@ -179,7 +188,9 @@ app.post('/api/campaigns', async (req, res) => {
             ]
         );
 
-        /* Создаём комнату */
+        /*
+         * Создаём комнату
+         */
 
         let room = null;
 
@@ -190,7 +201,8 @@ app.post('/api/campaigns', async (req, res) => {
                 const roomResult = await client.query(
                     'INSERT INTO rooms ' +
                     '(campaign_id, room_code) ' +
-                    'VALUES ($1, $2) RETURNING *',
+                    'VALUES ($1, $2) ' +
+                    'RETURNING *',
                     [
                         campaign.id,
                         roomCode
@@ -199,7 +211,6 @@ app.post('/api/campaigns', async (req, res) => {
 
                 room = roomResult.rows[0];
                 break;
-
             } catch (error) {
                 if (error.code !== '23505') {
                     throw error;
@@ -213,7 +224,9 @@ app.post('/api/campaigns', async (req, res) => {
             );
         }
 
-        /* Создаём начальное состояние комнаты */
+        /*
+         * Начальное состояние комнаты
+         */
 
         await client.query(
             'INSERT INTO room_state (room_id, state) ' +
@@ -228,7 +241,7 @@ app.post('/api/campaigns', async (req, res) => {
         await client.query('COMMIT');
 
         res.status(201).json({
-            campaign: campaign,
+            campaign,
 
             room: {
                 id: room.id,
@@ -246,10 +259,14 @@ app.post('/api/campaigns', async (req, res) => {
     } catch (error) {
         await client.query('ROLLBACK');
 
-        console.error('Create campaign error:', error);
+        console.error(
+            'Create campaign error:',
+            error
+        );
 
         res.status(500).json({
-            error: error.message || 'Не удалось создать кампанию'
+            error: error.message ||
+                'Не удалось создать кампанию'
         });
 
     } finally {
@@ -279,7 +296,10 @@ app.get('/api/campaigns', async (_req, res) => {
         });
 
     } catch (error) {
-        console.error('Get campaigns error:', error);
+        console.error(
+            'Get campaigns error:',
+            error
+        );
 
         res.status(500).json({
             error: 'Не удалось получить кампании'
@@ -321,7 +341,7 @@ app.post('/api/rooms/join', async (req, res) => {
             [roomCode]
         );
 
-        if (!roomResult.rowCount) {
+        if (roomResult.rowCount === 0) {
             return res.status(404).json({
                 error: 'Комната не найдена'
             });
@@ -329,7 +349,9 @@ app.post('/api/rooms/join', async (req, res) => {
 
         const room = roomResult.rows[0];
 
-        /* Создаём пользователя */
+        /*
+         * Создаём пользователя
+         */
 
         const userResult = await pool.query(
             'INSERT INTO users (username) ' +
@@ -339,25 +361,20 @@ app.post('/api/rooms/join', async (req, res) => {
 
         const user = userResult.rows[0];
 
-        /* Добавляем игрока в кампанию */
+        /*
+         * Добавляем игрока
+         */
 
-        try {
-            await pool.query(
-                'INSERT INTO campaign_members ' +
-                '(campaign_id, user_id, role) ' +
-                'VALUES ($1, $2, $3)',
-                [
-                    room.campaign_id,
-                    user.id,
-                    'player'
-                ]
-            );
-
-        } catch (error) {
-            if (error.code !== '23505') {
-                throw error;
-            }
-        }
+        await pool.query(
+            'INSERT INTO campaign_members ' +
+            '(campaign_id, user_id, role) ' +
+            'VALUES ($1, $2, $3)',
+            [
+                room.campaign_id,
+                user.id,
+                'player'
+            ]
+        );
 
         broadcast(room.id, {
             type: 'players_updated'
@@ -384,10 +401,14 @@ app.post('/api/rooms/join', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Join room error:', error);
+        console.error(
+            'Join room error:',
+            error
+        );
 
         res.status(500).json({
-            error: error.message || 'Не удалось подключиться к комнате'
+            error: error.message ||
+                'Не удалось подключиться к комнате'
         });
     }
 });
@@ -397,33 +418,39 @@ app.post('/api/rooms/join', async (req, res) => {
    GET PLAYERS
 ========================================================= */
 
-app.get('/api/rooms/:roomId/players', async (req, res) => {
-    try {
-        const result = await pool.query(
-            'SELECT u.id, ' +
-            'u.username AS name, ' +
-            'cm.role, ' +
-            'cm.joined_at ' +
-            'FROM campaign_members cm ' +
-            'JOIN users u ON u.id = cm.user_id ' +
-            'JOIN rooms r ON r.campaign_id = cm.campaign_id ' +
-            'WHERE r.id = $1 ' +
-            'ORDER BY cm.joined_at',
-            [req.params.roomId]
-        );
+app.get(
+    '/api/rooms/:roomId/players',
+    async (req, res) => {
+        try {
+            const result = await pool.query(
+                'SELECT u.id, ' +
+                'u.username AS name, ' +
+                'cm.role, ' +
+                'cm.joined_at ' +
+                'FROM campaign_members cm ' +
+                'JOIN users u ON u.id = cm.user_id ' +
+                'WHERE cm.campaign_id = ' +
+                '(SELECT campaign_id FROM rooms WHERE id = $1) ' +
+                'ORDER BY cm.joined_at',
+                [req.params.roomId]
+            );
 
-        res.json({
-            players: result.rows
-        });
+            res.json({
+                players: result.rows
+            });
 
-    } catch (error) {
-        console.error('Get players error:', error);
+        } catch (error) {
+            console.error(
+                'Get players error:',
+                error
+            );
 
-        res.status(500).json({
-            error: 'Не удалось получить список игроков'
-        });
+            res.status(500).json({
+                error: 'Не удалось получить список игроков'
+            });
+        }
     }
-});
+);
 
 
 /* =========================================================
@@ -439,7 +466,7 @@ app.delete(
                 [req.params.roomId]
             );
 
-            if (!roomResult.rowCount) {
+            if (roomResult.rowCount === 0) {
                 return res.status(404).json({
                     error: 'Комната не найдена'
                 });
@@ -450,7 +477,8 @@ app.delete(
 
             await pool.query(
                 'DELETE FROM campaign_members ' +
-                'WHERE campaign_id = $1 AND user_id = $2',
+                'WHERE campaign_id = $1 ' +
+                'AND user_id = $2',
                 [
                     campaignId,
                     req.params.playerId
@@ -466,7 +494,10 @@ app.delete(
             });
 
         } catch (error) {
-            console.error('Delete player error:', error);
+            console.error(
+                'Delete player error:',
+                error
+            );
 
             res.status(500).json({
                 error: 'Не удалось удалить игрока'
@@ -525,7 +556,7 @@ app.put(
 
             broadcast(roomId, {
                 type: 'state_snapshot',
-                state: state,
+                state,
                 from: req.body?.from || null,
                 updatedAt:
                     new Date().toISOString()
@@ -555,190 +586,182 @@ app.put(
 ========================================================= */
 
 wss.on('connection', async (ws, req) => {
-    try {
-        const url = new URL(
-            req.url,
-            'http://localhost'
+    const url = new URL(
+        req.url,
+        'http://localhost'
+    );
+
+    const roomId =
+        url.searchParams.get('roomId');
+
+    const playerId =
+        url.searchParams.get('playerId');
+
+    if (!roomId || !playerId) {
+        ws.close(
+            1008,
+            'roomId/playerId required'
         );
 
-        const roomId =
-            url.searchParams.get('roomId');
+        return;
+    }
 
-        const playerId =
-            url.searchParams.get('playerId');
+    if (!sockets.has(roomId)) {
+        sockets.set(
+            roomId,
+            new Set()
+        );
+    }
 
-        if (!roomId || !playerId) {
-            ws.close(
-                1008,
-                'roomId/playerId required'
-            );
+    sockets
+        .get(roomId)
+        .add(ws);
 
-            return;
-        }
+    /*
+     * Сразу отправляем состояние комнаты
+     */
 
-        if (!sockets.has(roomId)) {
-            sockets.set(
-                roomId,
-                new Set()
-            );
-        }
+    try {
+        const current =
+            await getRoomState(roomId);
 
-        sockets
-            .get(roomId)
-            .add(ws);
+        ws.send(
+            JSON.stringify({
+                type: 'state_snapshot',
+                state: current.state || {},
+                updatedAt: current.updated_at
+            })
+        );
+    } catch (error) {
+        console.error(
+            'Initial state error:',
+            error
+        );
+    }
+
+    broadcast(roomId, {
+        type: 'players_updated'
+    });
 
 
-        /* Отправляем текущее состояние */
+    /*
+     * Сообщения WebSocket
+     */
 
+    ws.on('message', async raw => {
         try {
-            const current =
-                await getRoomState(roomId);
+            const message =
+                JSON.parse(raw.toString());
 
-            ws.send(
-                JSON.stringify({
+
+            /* PING */
+
+            if (message.type === 'ping') {
+                ws.send(
+                    JSON.stringify({
+                        type: 'pong'
+                    })
+                );
+
+                return;
+            }
+
+
+            /* GAME STATE */
+
+            if (message.type === 'state_update') {
+                const nextState =
+                    message.state || {};
+
+                await saveRoomState(
+                    roomId,
+                    nextState
+                );
+
+                broadcast(roomId, {
                     type: 'state_snapshot',
-                    state: current.state || {},
-                    updatedAt: current.updated_at
-                })
-            );
+                    state: nextState,
+                    from: playerId,
+                    updatedAt:
+                        new Date().toISOString()
+                });
+
+                return;
+            }
+
+
+            /* DICE */
+
+            if (message.type === 'dice_roll') {
+                broadcast(roomId, {
+                    type: 'dice_roll',
+                    roll: message.roll || {},
+                    from: playerId,
+                    playerName:
+                        message.playerName || 'Игрок'
+                });
+
+                return;
+            }
+
+
+            /* CANVAS */
+
+            if (message.type === 'canvas_update') {
+                broadcast(roomId, {
+                    type: 'canvas_update',
+                    canvas:
+                        message.canvas || null,
+                    canvasType:
+                        message.canvasType || 'draw',
+                    from: playerId
+                });
+
+                return;
+            }
+
+
+            /* ROOM EVENT */
+
+            if (message.type === 'room_event') {
+                broadcast(roomId, {
+                    type: 'room_event',
+                    from: playerId,
+                    event: message.event
+                });
+
+                return;
+            }
 
         } catch (error) {
             console.error(
-                'Initial state error:',
+                'WS message error:',
                 error
             );
         }
+    });
 
+
+    /*
+     * Отключение
+     */
+
+    ws.on('close', () => {
+        const clients =
+            sockets.get(roomId);
+
+        if (clients) {
+            clients.delete(ws);
+
+            if (clients.size === 0) {
+                sockets.delete(roomId);
+            }
+        }
 
         broadcast(roomId, {
             type: 'players_updated'
         });
-
-
-        /* Обработка сообщений */
-
-        ws.on('message', async raw => {
-            try {
-                const message =
-                    JSON.parse(raw.toString());
-
-
-                /* PING */
-
-                if (message.type === 'ping') {
-                    ws.send(
-                        JSON.stringify({
-                            type: 'pong'
-                        })
-                    );
-
-                    return;
-                }
-
-
-                /* GAME STATE */
-
-                if (message.type === 'state_update') {
-                    const nextState =
-                        message.state || {};
-
-                    await saveRoomState(
-                        roomId,
-                        nextState
-                    );
-
-                    broadcast(roomId, {
-                        type: 'state_snapshot',
-                        state: nextState,
-                        from: playerId,
-                        updatedAt:
-                            new Date().toISOString()
-                    });
-
-                    return;
-                }
-
-
-                /* DICE */
-
-                if (message.type === 'dice_roll') {
-                    broadcast(roomId, {
-                        type: 'dice_roll',
-                        roll: message.roll || {},
-                        from: playerId,
-                        playerName:
-                            message.playerName || 'Игрок'
-                    });
-
-                    return;
-                }
-
-
-                /* CANVAS */
-
-                if (message.type === 'canvas_update') {
-                    broadcast(roomId, {
-                        type: 'canvas_update',
-                        canvas:
-                            message.canvas || null,
-                        canvasType:
-                            message.canvasType || 'draw',
-                        from: playerId
-                    });
-
-                    return;
-                }
-
-
-                /* ROOM EVENT */
-
-                if (message.type === 'room_event') {
-                    broadcast(roomId, {
-                        type: 'room_event',
-                        from: playerId,
-                        event: message.event
-                    });
-
-                    return;
-                }
-
-            } catch (error) {
-                console.error(
-                    'WS message error:',
-                    error
-                );
-            }
-        });
-
-
-        /* Отключение */
-
-        ws.on('close', () => {
-            const set =
-                sockets.get(roomId);
-
-            set?.delete(ws);
-
-            if (set?.size === 0) {
-                sockets.delete(roomId);
-            }
-
-            broadcast(roomId, {
-                type: 'players_updated'
-            });
-        });
-
-    } catch (error) {
-        console.error(
-            'WebSocket connection error:',
-            error
-        );
-
-        ws.close(
-            1011,
-            'Internal server error'
-        );
-    }
+    });
 });
 
 
@@ -747,15 +770,15 @@ wss.on('connection', async (ws, req) => {
 ========================================================= */
 
 app.use(
-    (err, _req, res, _next) => {
+    (error, _req, res, _next) => {
         console.error(
             'Unhandled server error:',
-            err
+            error
         );
 
         res.status(500).json({
             error:
-                err.message ||
+                error.message ||
                 'Внутренняя ошибка сервера'
         });
     }
@@ -763,7 +786,7 @@ app.use(
 
 
 /* =========================================================
-   START
+   START SERVER
 ========================================================= */
 
 server.listen(
@@ -774,4 +797,3 @@ server.listen(
         );
     }
 );
-```
