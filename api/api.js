@@ -3,7 +3,7 @@
 // Игровые данные не отправляются на сервер автоматически.
 
 window.DND_API = {
-  baseUrl: "",
+  baseUrl: "https://dnd-toolkit-backend.onrender.com",
   connected: false,
 
   configure(baseUrl) {
