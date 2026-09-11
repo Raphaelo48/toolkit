@@ -31,7 +31,6 @@
 
   window.closeOnlinePanel = function(){
     document.getElementById('online-overlay').classList.add('hidden');
-    disconnect();
   };
 
   async function req(path, opts={}){
