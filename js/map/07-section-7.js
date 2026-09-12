@@ -83,7 +83,46 @@ function openTokenContextMenu(clientX, clientY, tokenId) {
     </div>
   `;
 
+  // Мастер: для лут-объекта добавляем пункт "Подобрать в инвентарь" вверху
+  if (token.kind === 'loot' && !token.isLootChest && token.lootId) {
+    const pickupItem = document.createElement('div');
+    pickupItem.innerHTML = `
+      <div class="ctx-item" style="color:var(--accent)" onclick="addLootItemToCharInventory('${token.lootId}', ${tokenId}); closeContextMenu();">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8h14M5 8a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v.01a2 2 0 01-2 2M5 8l1 12a2 2 0 002 2h8a2 2 0 002-2L19 8"/></svg>
+        <span>Подобрать в инвентарь</span>
+      </div>
+      <div class="ctx-separator"></div>
+    `;
+    menu.insertBefore(pickupItem.firstElementChild, menu.firstElementChild);
+    menu.insertBefore(pickupItem.firstElementChild, menu.firstElementChild);
+  }
+
   document.body.appendChild(menu);
   positionContextMenu(menu, clientX, clientY);
   adjustSubmenus(menu);
+}
+
+// ── ПКМ-меню подбора для игрока ──────────────────────────────────────────
+function openPickupContextMenu(clientX, clientY, tokenId) {
+  const token = state.tokens.find(t => t.id === tokenId);
+  if (!token) return;
+  closeContextMenu();
+
+  const menu = document.createElement('div');
+  menu.className = 'context-menu';
+  menu.id = 'context-menu';
+  menu.innerHTML = `
+    <div class="ctx-header">${token.emoji || '📦'} ${escapeHtml(token.name)}</div>
+    <div class="ctx-item" onclick="addLootItemToCharInventory('${token.lootId}', ${tokenId}); closeContextMenu();">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8h14M5 8a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v.01a2 2 0 01-2 2M5 8l1 12a2 2 0 002 2h8a2 2 0 002-2L19 8"/></svg>
+      <span>Подобрать</span>
+    </div>
+    ${token.notes ? `
+      <div class="ctx-separator"></div>
+      <div style="padding:6px 10px;font-size:11px;color:var(--text-2);max-width:200px;line-height:1.4;">${escapeHtml(token.notes)}</div>
+    ` : ''}
+  `;
+
+  document.body.appendChild(menu);
+  positionContextMenu(menu, clientX, clientY);
 }

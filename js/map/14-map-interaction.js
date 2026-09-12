@@ -159,12 +159,22 @@ function setupMapInteraction() {
     e.preventDefault();
     const role = window.dndOnlineGetRole?.();
     const tokenEl = e.target.closest('.token');
-    if (role === 'player' && tokenEl) {
-      toast('Управление токенами доступно только мастеру', 'error');
-      return;
-    }
+
     if (tokenEl) {
       const id = parseInt(tokenEl.dataset.id);
+      const token = state.tokens.find(t => t.id === id);
+
+      // Игрок: только лут-объекты — показываем меню подбора
+      if (role === 'player') {
+        if (token?.kind === 'loot' && !token.isLootChest) {
+          openPickupContextMenu(e.clientX, e.clientY, id);
+        } else {
+          toast('Контекстное меню токенов доступно только мастеру', 'error');
+        }
+        return;
+      }
+
+      // Мастер: лут-объект — добавляем пункт "Подобрать" в стандартное меню
       openTokenContextMenu(e.clientX, e.clientY, id);
     } else {
       const rect = area.getBoundingClientRect();
