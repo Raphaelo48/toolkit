@@ -70,13 +70,13 @@ function renderInfoPanel() {
     `;
   }
 
-  // Кнопка "В инвентарь" для обычного лут-предмета на карте (не сундук)
+  // Кнопка "В инвентарь" для обычного лут-предмета на карте (не сундук) — удаляет токен с карты
   let pickupLootBtn = '';
   if (token.kind === 'loot' && !token.isLootChest && token.lootId) {
     pickupLootBtn = `
-      <button class="btn btn-sm" style="flex:1" onclick="addLootItemToCharInventory('${token.lootId}')">
+      <button class="btn btn-sm" style="flex:1" onclick="addLootItemToCharInventory('${token.lootId}', ${token.id})">
         <svg style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8h14M5 8a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v.01a2 2 0 01-2 2M5 8l1 12a2 2 0 002 2h8a2 2 0 002-2L19 8"/></svg>
-        В инвентарь
+        Подобрать
       </button>
     `;
   }

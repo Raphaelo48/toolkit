@@ -1,0 +1,30 @@
+CREATE TABLE IF NOT EXISTS campaigns (
+ id BIGSERIAL PRIMARY KEY,
+ name VARCHAR(120) NOT NULL,
+ description TEXT DEFAULT '',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS rooms (
+ id BIGSERIAL PRIMARY KEY,
+ campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+ code VARCHAR(8) NOT NULL UNIQUE,
+ status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK(status IN ('active','closed')),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS room_players (
+ id BIGSERIAL PRIMARY KEY,
+ room_id BIGINT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+ name VARCHAR(80) NOT NULL,
+ role VARCHAR(20) NOT NULL DEFAULT 'player' CHECK(role IN ('master','player')),
+ joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ UNIQUE(room_id,name)
+);
+CREATE INDEX IF NOT EXISTS idx_rooms_campaign_id ON rooms(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_room_players_room_id ON room_players(room_id);
+
+CREATE TABLE IF NOT EXISTS room_state (
+ room_id BIGINT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+ state JSONB NOT NULL DEFAULT '{}'::jsonb,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

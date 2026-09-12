@@ -23,10 +23,10 @@
 
   window.openOnlinePanel = function(){
     document.getElementById('online-overlay').classList.remove('hidden');
-    if(state.room && state.player){
-      enterRoom();
-      return;
-    }
+    // Если уже подключены — показываем комнату
+    if(state.room && state.player){ enterRoom(); return; }
+    // Пробуем восстановить сессию из sessionStorage
+    if(loadSession()){ enterRoom(); return; }
     renderHome();
   };
 
@@ -83,6 +83,38 @@
     document.getElementById('join-room').onsubmit = joinRoom;
   }
 
+  // ── сессия ──────────────────────────────────────────────
+  const SESSION_KEY = 'dnd_online_session';
+
+  function saveSession() {
+    if (!state.campaign || !state.room || !state.player) return;
+    try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+        campaign: state.campaign,
+        room: state.room,
+        player: state.player
+      }));
+    } catch(e) {}
+  }
+
+  function loadSession() {
+    try {
+      const raw = sessionStorage.getItem(SESSION_KEY);
+      if (!raw) return false;
+      const s = JSON.parse(raw);
+      if (!s?.room?.id || !s?.player?.id) return false;
+      state.campaign = s.campaign;
+      state.room = s.room;
+      state.player = s.player;
+      return true;
+    } catch(e) { return false; }
+  }
+
+  function clearSession() {
+    try { sessionStorage.removeItem(SESSION_KEY); } catch(e) {}
+  }
+  // ────────────────────────────────────────────────────────
+
   async function createCampaign(e){
     e.preventDefault();
     const f = new FormData(e.target);
@@ -94,6 +126,7 @@
       state.campaign = r.campaign;
       state.room = r.room;
       state.player = r.player;
+      saveSession();
       enterRoom();
     }catch(err){ msg(err.message,true); }
   }
@@ -109,6 +142,7 @@
       state.campaign = r.campaign;
       state.room = r.room;
       state.player = r.player;
+      saveSession();
       enterRoom();
     }catch(err){ msg(err.message,true); }
   }
@@ -272,6 +306,7 @@
     try{
       await req(`/api/rooms/${state.room.id}/players/${state.player.id}`, { method:'DELETE' });
     }catch(e){}
+    clearSession();
     state.campaign = null;
     state.room = null;
     state.player = null;
