@@ -47,5 +47,15 @@ export async function ensureSchema() {
     const dir = path.dirname(fileURLToPath(import.meta.url));
     const sql = fs.readFileSync(path.join(dir, '..', 'schema.sql'), 'utf8');
     await pool.query(sql);
+
+    // Supabase открывает таблицы схемы public через свой REST API. Включаем RLS без политик:
+    // сервер (владелец таблиц) работает как раньше, а снаружи через API таблицы недоступны.
+    for (const table of ['users', 'campaigns', 'campaign_members', 'rooms', 'room_state', 'token_inventory']) {
+        try {
+            await pool.query(`ALTER TABLE IF EXISTS ${table} ENABLE ROW LEVEL SECURITY`);
+        } catch (err) {
+            console.warn(`[db] RLS для ${table} не включён:`, err.message);
+        }
+    }
     console.log('[db] schema ok');
 }
