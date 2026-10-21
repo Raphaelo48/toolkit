@@ -252,6 +252,7 @@ async function authenticate(ws, roomId, playerId, token) {
     if (ws.readyState !== 1) return null; // клиент успел отключиться
     const room = await getRoom(roomId);
     const ctx = { room, playerId: String(member.user_id), role: member.role, name: member.username };
+    if (member.role === 'master') room.masterId = String(member.user_id);
     ws.meta = ctx;
     room.addClient(ws);
 
@@ -270,6 +271,7 @@ async function authenticate(ws, roomId, playerId, token) {
     for (const canvasType of ['draw', 'fog']) {
         if (room.canvases[canvasType]) room.send(ws, { type: 'canvas_update', canvasType, canvas: room.canvases[canvasType] });
     }
+    room.sendWalls(ws);
     room.sendSnapshot(ws, { initial: true });
     notifyPlayers(roomId);
     return ctx;
@@ -340,6 +342,16 @@ function onMessage(ws, ctx, raw) {
                 }
                 room.broadcastSnapshot({ from: playerId });
                 room.broadcast({ type: 'initiative_rolled', entry: res.entry, playerName: ctx.name });
+            });
+            return;
+
+        // Стены для обзора (мастер распознал по карте или дорисовал)
+        case 'vision_walls':
+            if (role !== 'master') return deny('Стены задаёт только мастер.');
+            room.run(() => {
+                if (!room.setWalls(message.walls || null)) return deny('Не удалось сохранить стены');
+                for (const client of room.clients) if (client !== ws) room.sendWalls(client);
+                room.broadcastSnapshot({ from: playerId });
             });
             return;
 

@@ -1,5 +1,6 @@
 // ============ DRAWING ============
 function drawAt(x, y) {
+  if (state.tool === 'vwall' || state.tool === 'vfloor') { visionPaintAt(x, y); return; }
   const size = state.drawSettings.size;
   const color = state.drawSettings.color;
   if (state.tool === 'brush') {

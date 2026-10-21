@@ -62,6 +62,7 @@
       drawSettings:clone(state.drawSettings),
       shapeSettings:clone(state.shapeSettings),
       party:clone(state.party || {}),
+      vision:clone(state.vision || {}),
       eventLog:clone(state.eventLog),
     };
   }
@@ -224,6 +225,7 @@
       if(Array.isArray(shared.diceHistory)) state.diceHistory = shared.diceHistory;
       if(Array.isArray(shared.eventLog)) state.eventLog = shared.eventLog;
       if(shared.party && typeof shared.party === 'object') state.party = shared.party;
+      if(shared.vision && typeof shared.vision === 'object') state.vision = shared.vision;
       if(shared.inventory) state.inventory = shared.inventory; // старый формат
       window.InventoryCore?.migrate(state);
       if(state.selectedTokenId != null && !state.tokens.some(t => t.id === state.selectedTokenId)) state.selectedTokenId = null;
@@ -231,6 +233,7 @@
       sizeMapLayers();
       renderAll?.(); drawGrid?.(); renderShapes?.(); updateMapTransform?.(); renderLogFilters?.(); renderLog?.();
       window.dndInventoryRefresh?.();
+      window.renderVisionPanel?.(); window.dndVisionRender?.();
       online.lastSignature = currentSignature();
     } catch(err){
       console.error('[D&D Online] apply state failed', err);
@@ -290,6 +293,8 @@
     publishNow('seed', true);
     sendCanvasNow('draw');
     sendCanvasNow('fog');
+    const walls = window.visionSaveData?.();
+    if(walls) send({ type:'vision_walls', walls });
     toastSafe('Комната заполнена текущей картой и токенами');
   }
 
@@ -388,6 +393,12 @@
         toastSafe(`⚡ ${e.name}: инициатива ${e.value} (d20 ${e.roll}${sign})`);
         return;
       }
+      case 'vision_walls':
+        window.dndVisionSetWalls?.(m);
+        return;
+      case 'vision':
+        window.dndVisionSetMasks?.(m);
+        return;
       case 'action_error':
         toastSafe(m.message || 'Действие не выполнено', 'error');
         return;
@@ -401,6 +412,7 @@
 
   online.publishState = publishState;
   online.sendCanvas = sendCanvas;
+  online.sendVisionWalls = walls => ready() && send({ type:'vision_walls', walls });
   online.sendInitiativeRoll = (tokenId, mod) => ready() && send({ type:'initiative_roll', tokenId, mod });
   online.inRoom = () => !!online.meta && !!window.dndOnlineGetRole?.();
   online.isReady = ready;

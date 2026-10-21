@@ -7,7 +7,16 @@ function setupMapInteraction() {
     if (e.button !== 0) return;
     const tokenEl = e.target.closest('.token');
 
-    if (['brush', 'eraser', 'fog'].includes(state.tool) && drawCanvas.classList.contains('interactive')) {
+    // Обзор игроков: распознать стены, кисти стены/прохода, двери
+    if (state.tool === 'vdetect' || state.tool === 'vdoor') {
+      const rect = area.getBoundingClientRect();
+      const mc = screenToMap(e.clientX - rect.left, e.clientY - rect.top);
+      if (state.tool === 'vdetect') visionDetectAt(mc.x, mc.y); else visionDoorDown(mc.x, mc.y);
+      e.preventDefault();
+      return;
+    }
+
+    if (['brush', 'eraser', 'fog', 'vwall', 'vfloor'].includes(state.tool) && drawCanvas.classList.contains('interactive')) {
       const rect = area.getBoundingClientRect();
       const mc = screenToMap(e.clientX - rect.left, e.clientY - rect.top);
       state.isDrawing = true;
@@ -71,7 +80,12 @@ function setupMapInteraction() {
       return;
     }
 
-    if (state.tool === 'select') selectToken(null);
+    if (state.tool === 'select') {
+      selectToken(null);
+      // Клик без перетаскивания по двери — открыть/закрыть (проверяется при отпускании)
+      const rect = area.getBoundingClientRect();
+      state.clickStart = { sx: e.clientX, sy: e.clientY, map: screenToMap(e.clientX - rect.left, e.clientY - rect.top) };
+    }
 
     if (state.tool === 'pan' || state.tool === 'select') {
       state.isPanning = true;
@@ -100,6 +114,7 @@ function setupMapInteraction() {
         token.y = mc.y - state.dragOffset.y;
         state.draggingToken.style.left = (token.x - token.size / 2) + 'px';
         state.draggingToken.style.top = (token.y - token.size / 2) + 'px';
+        window.dndVisionOnDrag?.(token);
       }
     } else if (state.shapeStart) {
       const area = document.getElementById('map-area');
@@ -116,7 +131,17 @@ function setupMapInteraction() {
     }
   });
 
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('mouseup', (e) => {
+    if (state.clickStart) {
+      const c = state.clickStart;
+      state.clickStart = null;
+      if (Math.hypot(e.clientX - c.sx, e.clientY - c.sy) < 5) visionTryToggleDoor?.(c.map.x, c.map.y);
+    }
+    if (state.tool === 'vdoor' && VIS.doorStart) {
+      const rect = document.getElementById('map-area').getBoundingClientRect();
+      const mc = screenToMap(e.clientX - rect.left, e.clientY - rect.top);
+      visionDoorUp(mc.x, mc.y, e.shiftKey);
+    }
     if (state.isPanning) state.isPanning = false;
     if (state.draggingToken) {
       state.draggingToken.classList.remove('dragging');
@@ -133,6 +158,11 @@ function setupMapInteraction() {
       renderShapes();
     }
     if (!state.shapeStart && !state.shapePreview) window.dndOnlineSync?.('shape_change');
+    if (state.isDrawing && ['vwall', 'vfloor'].includes(state.tool)) {
+      state.isDrawing = false;
+      state.lastDrawPos = null;
+      visionCommitWalls();
+    }
     if (state.isDrawing) {
       state.isDrawing = false;
       state.lastDrawPos = null;

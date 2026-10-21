@@ -37,6 +37,14 @@ function renderInfoPanel() {
     }
   }
 
+  if (token.kind === 'character' && !isPlayerRole() && typeof VIS !== 'undefined' && VIS.walls) {
+    const src = state.characters.find(c => c.id === token.sourceId);
+    if (src) extraStats += `
+        <div class="stat-box" style="cursor:pointer" title="Изменить радиус обзора" onclick="visionEditCharacterRadius(${src.id})">
+          <div class="stat-label">👁 Обзор</div>
+          <div class="stat-value">${Number(src.visionRadius) > 0 ? src.visionRadius : visionSettings().radius}<small>кл.</small></div>
+        </div>`;
+  }
   if (token.ac != null && token.kind !== 'character') {
     extraStats += `
         <div class="stat-box">

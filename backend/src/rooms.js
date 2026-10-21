@@ -9,13 +9,17 @@ import vm from 'vm';
 import { fileURLToPath } from 'url';
 import { store } from './store/index.js';
 
-// Правила инвентаря — общий файл с браузером (js/shared/inventory-core.js)
-const Inv = (() => {
-    const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'js', 'shared', 'inventory-core.js');
-    const sandbox = { module: { exports: {} } };
+// Общие с браузером модули (js/shared): правила инвентаря и расчёт обзора
+function loadShared(name) {
+    const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'js', 'shared', name);
+    const sandbox = { module: { exports: {} }, btoa, atob, Math, Uint8Array, Uint32Array, String };
     vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: file });
     return sandbox.module.exports;
-})();
+}
+const Inv = loadShared('inventory-core.js');
+const Vision = loadShared('vision-core.js');
+const MAX_VISION_CELLS = 2_000_000;
+const DEFAULT_VISION_RADIUS = 12; // в клетках сетки
 
 const SAVE_DELAY_MS = 1000;
 const UNLOAD_AFTER_MS = 10 * 60 * 1000;
@@ -25,7 +29,7 @@ const MAX_PLAYER_TOKENS_ON_MAP = 1; // сколько из них может с�
 // Эти фишки игроки вообще не получают: тайное для мастера
 const GM_ONLY_TOKEN_KINDS = new Set(['hidden', 'trap']);
 // Эти поля персонажа меняет только мастер
-const MASTER_ONLY_CHARACTER_FIELDS = ['xp', 'level', 'hpMax'];
+const MASTER_ONLY_CHARACTER_FIELDS = ['xp', 'level', 'hpMax', 'visionRadius'];
 // Эти поля меняются только действиями инвентаря на сервере — никакой снимок их не перезапишет
 const SERVER_OWNED_CHARACTER_FIELDS = ['inventory', 'coins'];
 const SERVER_OWNED_TOKEN_FIELDS = ['inventory', 'coins', 'contents', 'item', 'qty'];
@@ -43,6 +47,10 @@ class Room {
         this.clients = new Set();        // ws
         this.playerPatchVersion = new Map(); // playerId → версия последнего изменения игрока
         this.actionHistory = [];              // { version, addedTokens, removedTokenIds, logEntry } — для слияния со старыми снимками
+        this.masterId = null;
+        this.walls = null;                    // { w, h, cell, data, mask } — стены для обзора
+        this.explored = new Map();            // группа обзора → Uint8Array «уже видели»
+        this.vision = null;                   // последний расчёт: группа → { visible, explored }
         this.queue = Promise.resolve();
         this.saveTimer = null;
         this.dirty = false;
@@ -69,9 +77,13 @@ class Room {
         if (!this.dirty) return;
         this.dirty = false;
         try {
+            const memory = {};
+            if (this.walls) for (const [key, mask] of this.explored) memory[key] = Vision.packBits(mask);
             await store.saveRoomState(this.id, {
-                state: this.state, version: this.version, map_src: this.mapSrc,
-                draw_canvas: this.canvases.draw, fog_canvas: this.canvases.fog
+                state: { ...this.state, _visionMemory: this.walls ? { w: this.walls.w, h: this.walls.h, groups: memory } : undefined },
+                version: this.version, map_src: this.mapSrc,
+                draw_canvas: this.canvases.draw, fog_canvas: this.canvases.fog,
+                vision_walls: this.walls ? JSON.stringify({ w: this.walls.w, h: this.walls.h, cell: this.walls.cell, data: this.walls.data }) : null
             });
         } catch (err) {
             this.dirty = true; // попробуем ещё раз
@@ -210,6 +222,106 @@ class Room {
         for (const ws of this.clients) if (ws !== exclude) this.send(ws, data);
     }
 
+    /* ---------- обзор (туман войны по линии видимости) ---------- */
+
+    setWalls(payload) {
+        if (!payload) { this.walls = null; this.explored.clear(); this.vision = null; this.markDirty(); return true; }
+        const w = Math.trunc(payload.w), h = Math.trunc(payload.h), cell = Number(payload.cell);
+        if (!(w > 0 && h > 0 && w * h <= MAX_VISION_CELLS && cell >= 2 && cell <= 128) || typeof payload.data !== 'string') return false;
+        const mask = Vision.unpackBits(payload.data, w * h);
+        if (!this.walls || this.walls.w !== w || this.walls.h !== h) this.explored.clear(); // другая карта — память обнуляется
+        this.walls = { w, h, cell, data: payload.data, mask };
+        this.markDirty();
+        return true;
+    }
+
+    visionSettings() {
+        const v = this.state.vision && typeof this.state.vision === 'object' ? this.state.vision : {};
+        return {
+            enabled: !!v.enabled && !!this.walls,
+            shared: v.shared !== false,
+            radius: Number(v.radius) > 0 ? Number(v.radius) : DEFAULT_VISION_RADIUS,
+            doors: Array.isArray(v.doors) ? v.doors : [],
+            resetAt: Number(v.resetAt) || 0
+        };
+    }
+
+    /** Персонажи игроков (не мастера) — их фишки «смотрят» и всегда видны группе. */
+    partyCharacters() {
+        return (this.state.characters || []).filter(c => c && c.ownerId != null && String(c.ownerId) !== String(this.masterId));
+    }
+
+    groupKey(playerId) {
+        return this.visionSettings().shared ? 'party' : `p:${playerId}`;
+    }
+
+    /** Пересчитать, что видит каждая группа. Вызывается перед рассылкой состояния. */
+    updateVision() {
+        const settings = this.visionSettings();
+        if (!settings.enabled) { this.vision = null; return; }
+        if (settings.resetAt && settings.resetAt !== this.lastResetAt) {
+            this.lastResetAt = settings.resetAt;
+            this.explored.clear(); // мастер начал новое исследование
+        }
+        const { w, h, cell, mask } = this.walls;
+        const blocking = Vision.blockingMask(mask, w, h, settings.doors);
+        const gridPx = Number(this.state.grid?.size) || 50;
+        const chars = new Map(this.partyCharacters().map(c => [String(c.id), c]));
+        const groups = new Map();
+        if (settings.shared) groups.set('party', []);
+        for (const c of chars.values()) if (!settings.shared) groups.set(`p:${c.ownerId}`, groups.get(`p:${c.ownerId}`) || []);
+        for (const t of this.state.tokens || []) {
+            const c = t?.kind === 'character' ? chars.get(String(t.sourceId)) : null;
+            if (!c) continue;
+            const key = settings.shared ? 'party' : `p:${c.ownerId}`;
+            const r = (Number(c.visionRadius) > 0 ? Number(c.visionRadius) : settings.radius) * gridPx;
+            groups.get(key).push({ x: Number(t.x) || 0, y: Number(t.y) || 0, r });
+        }
+        this.vision = new Map();
+        for (const [key, sources] of groups) {
+            const visible = Vision.computeVisible(blocking, w, h, cell, sources);
+            let explored = this.explored.get(key);
+            if (!explored || explored.length !== w * h) { explored = new Uint8Array(w * h); this.explored.set(key, explored); }
+            let grew = false;
+            for (let i = 0; i < visible.length; i++) if (visible[i] && !explored[i]) { explored[i] = 1; grew = true; }
+            if (grew) this.markDirty();
+            this.vision.set(key, { visible, explored });
+        }
+    }
+
+    /** Маски для участника: игроку — его группы, мастеру — объединение (чтобы видеть, что видят игроки). */
+    visionFor(ws) {
+        if (!this.vision) return null;
+        if (ws.meta?.role !== 'master') return this.vision.get(this.groupKey(ws.meta?.playerId)) || this.emptyVision();
+        const n = this.walls.w * this.walls.h;
+        const visible = new Uint8Array(n), explored = new Uint8Array(n);
+        for (const v of this.vision.values()) for (let i = 0; i < n; i++) { visible[i] |= v.visible[i]; explored[i] |= v.explored[i]; }
+        return { visible, explored };
+    }
+
+    emptyVision() {
+        const n = this.walls.w * this.walls.h;
+        const explored = this.explored.get(this.groupKey(null)) || new Uint8Array(n);
+        return { visible: new Uint8Array(n), explored };
+    }
+
+    sendVision(ws) {
+        const v = this.visionFor(ws);
+        const msg = v
+            ? JSON.stringify({ type: 'vision', w: this.walls.w, h: this.walls.h, cell: this.walls.cell,
+                visible: Vision.rleEncode(v.visible), explored: Vision.rleEncode(v.explored) })
+            : JSON.stringify({ type: 'vision', off: true });
+        if (ws.lastVisionMsg === msg) return;
+        ws.lastVisionMsg = msg;
+        this.send(ws, msg);
+    }
+
+    sendWalls(ws) {
+        this.send(ws, this.walls
+            ? { type: 'vision_walls', w: this.walls.w, h: this.walls.h, cell: this.walls.cell, data: this.walls.data }
+            : { type: 'vision_walls', none: true });
+    }
+
     snapshot(extra = {}) {
         return { type: 'state_snapshot', state: this.state, version: this.version, ...extra };
     }
@@ -217,22 +329,38 @@ class Room {
     /** Снимок для конкретного участника: игрок не получает тайного (заметки мастера, хиты врагов, ловушки…). */
     snapshotFor(ws, extra = {}) {
         const meta = ws.meta || {};
-        const state = meta.role === 'master' ? this.state : stateForPlayer(this.state, meta.playerId);
+        let state = this.state;
+        if (meta.role !== 'master') {
+            const v = this.vision ? this.visionFor(ws) : null;
+            state = stateForPlayer(this.state, meta.playerId, v && {
+                visible: v.visible, w: this.walls.w, h: this.walls.h, cell: this.walls.cell,
+                partyCharIds: new Set(this.partyCharacters().map(c => String(c.id)))
+            });
+        }
         return { type: 'state_snapshot', state, version: this.version, ...extra };
     }
 
     sendSnapshot(ws, extra = {}) {
+        this.updateVision();
         this.send(ws, this.snapshotFor(ws, extra));
+        this.sendVision(ws);
     }
 
-    /** Разослать снимок всем (каждому — свою версию). */
+    /**
+     * Разослать снимок всем (каждому — свою версию). exclude — отправитель изменения: ему снимок не нужен,
+     * но при включённом обзоре игроку он всё равно уходит — могли появиться/исчезнуть видимые фишки.
+     */
     broadcastSnapshot(extra = {}, exclude = null) {
+        this.updateVision();
         const cache = new Map();
         for (const ws of this.clients) {
-            if (ws === exclude) continue;
-            const key = ws.meta?.role === 'master' ? 'master' : `p:${ws.meta?.playerId}`;
-            if (!cache.has(key)) cache.set(key, JSON.stringify(this.snapshotFor(ws, extra)));
-            this.send(ws, cache.get(key));
+            const skip = ws === exclude && !(this.vision && ws.meta?.role !== 'master');
+            if (!skip) {
+                const key = ws.meta?.role === 'master' ? 'master' : `p:${ws.meta?.playerId}`;
+                if (!cache.has(key)) cache.set(key, JSON.stringify(this.snapshotFor(ws, extra)));
+                this.send(ws, cache.get(key));
+            }
+            this.sendVision(ws);
         }
     }
 
@@ -300,9 +428,21 @@ export async function getRoom(roomId) {
                 room.dirty = true;
             }
             if (room.version === 0 && Object.keys(room.state).length) room.version = 1;
+            if (row.vision_walls) {
+                try { room.setWalls(JSON.parse(row.vision_walls)); room.dirty = false; } catch (err) { console.warn(`[room ${id}] walls:`, err.message); }
+            }
+            const memory = room.state._visionMemory;
+            delete room.state._visionMemory;
+            if (memory && room.walls && memory.w === room.walls.w && memory.h === room.walls.h) {
+                for (const [key, data] of Object.entries(memory.groups || {})) room.explored.set(key, Vision.unpackBits(data, memory.w * memory.h));
+            }
             // Старый формат инвентаря (по фишкам) → вещи у персонажей
             if (Inv.migrate(room.state)) room.dirty = true;
         }
+        try {
+            const master = (await store.listMembers(id)).find(m => m.role === 'master');
+            if (master) room.masterId = String(master.id);
+        } catch { /* не критично */ }
         rooms.set(id, room);
         return room;
     })();
@@ -410,14 +550,18 @@ function insertInitiative(state, entry) {
  * ловушки и скрытые зоны, заметки мастера, хиты/КД и вещи чужих существ,
  * бестиарий мастера, вещи других персонажей, тайные записи журнала.
  */
-export function stateForPlayer(state, playerId) {
+export function stateForPlayer(state, playerId, vision = null) {
     const s = { ...state };
     const chars = Array.isArray(state.characters) ? state.characters : [];
     const ownCharIds = new Set(chars.filter(c => isOwnChar(c, playerId)).map(c => String(c.id)));
     const anyCharIds = new Set(chars.map(c => String(c.id)));
+    // При включённом обзоре игрок получает только те фишки, которые его группа видит сейчас (и союзников)
+    const seen = t => !vision
+        || (t.kind === 'character' && vision.partyCharIds.has(String(t.sourceId)))
+        || Vision.isPointVisible(vision.visible, vision.w, vision.h, vision.cell, Number(t.x) || 0, Number(t.y) || 0, vision.cell);
 
     s.tokens = (Array.isArray(state.tokens) ? state.tokens : [])
-        .filter(t => t && !GM_ONLY_TOKEN_KINDS.has(t.kind))
+        .filter(t => t && !GM_ONLY_TOKEN_KINDS.has(t.kind) && seen(t))
         .map(t => {
             if (t.kind === 'character' && ownCharIds.has(String(t.sourceId))) return t;
             const c = { ...t };
@@ -435,7 +579,13 @@ export function stateForPlayer(state, playerId) {
         return copy;
     });
     s.monsters = [];
-    s.initiative = (Array.isArray(state.initiative) ? state.initiative : []).map(i => {
+    if (vision) {
+        // Инициатива: тех, кого не видно, игрок видит без имени
+        const visibleIds = new Set(s.tokens.map(t => String(t.id)));
+        s.initiative = (Array.isArray(state.initiative) ? state.initiative : []).map(i =>
+            visibleIds.has(String(i.tokenId)) ? i : { id: i.id, value: i.value, tokenId: null, name: '???', emoji: '❔', sourceKind: 'hidden' });
+    }
+    s.initiative = (Array.isArray(s.initiative) ? s.initiative : []).map(i => {
         const isChar = i.sourceKind === 'character' && anyCharIds.has(String(i.sourceId));
         if (isChar) return i;
         const copy = { ...i };

@@ -1,6 +1,6 @@
 // ============ TOOLS ============
 function setTool(tool) {
-  if (window.dndOnlineCan && !window.dndOnlineCan('master') && ['brush','eraser','fog','text','shape'].includes(tool)) {
+  if (window.dndOnlineCan && !window.dndOnlineCan('master') && ['brush','eraser','fog','text','shape','vdetect','vwall','vfloor','vdoor'].includes(tool)) {
     toast('Инструменты карты доступны только мастеру', 'error');
     tool = 'select';
   }
@@ -10,17 +10,19 @@ function setTool(tool) {
   });
   const area = document.getElementById('map-area');
   area.classList.remove('tool-select', 'tool-pan', 'tool-draw');
-  if (['brush', 'eraser', 'fog', 'text', 'measure', 'shape'].includes(tool)) area.classList.add('tool-draw');
+  if (['brush', 'eraser', 'fog', 'text', 'measure', 'shape', 'vdetect', 'vwall', 'vfloor', 'vdoor'].includes(tool)) area.classList.add('tool-draw');
   else area.classList.add('tool-' + tool);
   const drawCanvas = document.getElementById('draw-canvas');
-  drawCanvas.classList.toggle('interactive', ['brush', 'eraser', 'fog', 'text', 'measure', 'shape'].includes(tool));
+  drawCanvas.classList.toggle('interactive', ['brush', 'eraser', 'fog', 'text', 'measure', 'shape', 'vdetect', 'vwall', 'vfloor', 'vdoor'].includes(tool));
   if (tool !== 'measure') clearMeasure();
   updateDrawBarVisibility();
+  window.renderVisionPanel?.();
+  window.dndVisionRender?.();
 }
 
 function updateDrawBarVisibility() {
   const bar = document.getElementById('draw-bar');
-  const show = ['brush', 'eraser', 'fog', 'shape'].includes(state.tool);
+  const show = ['brush', 'eraser', 'fog', 'shape', 'vwall', 'vfloor'].includes(state.tool);
   bar.classList.toggle('visible', show);
   const opacityLabel = document.getElementById('draw-opacity-label');
   const opacityDivider = document.getElementById('draw-opacity-divider');

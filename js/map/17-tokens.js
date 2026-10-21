@@ -61,6 +61,7 @@ function renderTokens() {
 
     layer.appendChild(el);
   });
+  window.dndVisionRender?.(); // без онлайна обзор считается от фишек на месте
 }
 
 function openTokenModal(editId = null) {

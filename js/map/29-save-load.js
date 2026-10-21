@@ -26,6 +26,8 @@ function buildSaveData() {
     drawSettings: state.drawSettings,
     shapeSettings: state.shapeSettings,
     party: state.party || {},
+    vision: state.vision || {},
+    visionWalls: window.visionSaveData?.() || null,
   };
 }
 
@@ -54,6 +56,8 @@ function applySaveData(data) {
   // Старые сохранения хранили вещи по фишкам — переносим их персонажам
   if (data.inventory && typeof data.inventory === 'object') state.inventory = data.inventory;
   InventoryCore.migrate(state);
+  state.vision = (data.vision && typeof data.vision === 'object') ? data.vision : {};
+  window.visionLoadData?.(data.visionWalls || null);
   state.selectedTokenId = null;
 
   document.getElementById('app').classList.toggle('sidebar-left-collapsed', state.sidebarLeftCollapsed);

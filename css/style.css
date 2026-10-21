@@ -609,3 +609,16 @@ button:disabled{opacity:.4;cursor:not-allowed;pointer-events:none;}
 body.role-player .gm-only, body.role-player .gm-only-inline { display: none !important; }
 body:not(.role-player) .player-only, body:not(.role-player) .player-only-inline { display: none !important; }
 .init-roll-hint { font-size: 11px; color: var(--text-2); margin: -4px 0 10px; text-align: center; }
+
+/* ===== Обзор игроков ===== */
+#vision-canvas, #vision-edit-canvas { position: absolute; top: 0; left: 0; pointer-events: none; display: none; }
+#vision-canvas { z-index: 35; }
+#vision-edit-canvas { z-index: 36; image-rendering: pixelated; }
+.vision-ico { width: 14px; text-align: center; font-size: 13px; }
+.vision-settings { display: flex; flex-direction: column; gap: 8px; padding: 8px 6px 4px; }
+.vision-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-1); cursor: pointer; }
+.vision-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-1); }
+.vision-row .input { width: auto; flex: 1; min-width: 0; padding: 4px 6px; }
+.vision-row input[type=number] { max-width: 56px; }
+.vision-hint { font-size: 11px; color: var(--text-2); padding: 4px 8px 8px; line-height: 1.4; }
+.vision-badge { display: inline-flex; width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border-strong); font-size: 9px; align-items: center; justify-content: center; cursor: help; letter-spacing: 0; }

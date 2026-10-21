@@ -51,6 +51,7 @@ function handleMapUpload(e) {
       fitMap();
       logEvent('system', `Карта загружена: ${file.name} (${state.map.width}×${state.map.height})`);
       toast('Карта загружена');
+      window.visionResetForNewMap?.();
       window.dndOnlineSync?.('map_upload');
       // Новая карта очищает рисунки и туман — сообщаем об этом игрокам
       window.dndOnlineCanvasSync?.('draw');

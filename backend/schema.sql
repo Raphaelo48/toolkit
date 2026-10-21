@@ -44,6 +44,7 @@ ALTER TABLE room_state ADD COLUMN IF NOT EXISTS version     BIGINT NOT NULL DEFA
 ALTER TABLE room_state ADD COLUMN IF NOT EXISTS map_src     TEXT;
 ALTER TABLE room_state ADD COLUMN IF NOT EXISTS draw_canvas TEXT;
 ALTER TABLE room_state ADD COLUMN IF NOT EXISTS fog_canvas  TEXT;
+ALTER TABLE room_state ADD COLUMN IF NOT EXISTS vision_walls TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_rooms_campaign_id ON rooms(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_campaign_members_user ON campaign_members(user_id);
