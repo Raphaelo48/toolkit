@@ -105,12 +105,20 @@ function placeLootOnMap(itemId, x, y) {
     isLootChest: item.isLootChest || false, lootPool: item.lootPool || null,
     conditions: []
   };
+  if (item.isLootChest) {
+    // Содержимое выпадает один раз — сразу при размещении
+    token.contents = rollChestContents(item.lootPool);
+  } else {
+    token.item = { id: item.id, name: item.name, icon: item.icon, rarity: item.rarity, desc: item.desc };
+    token.qty = 1;
+  }
   state.tokens.push(token);
   state.lastTokenPlaced = { ...token };
   renderTokens();
   selectToken(token.id);
   logEvent('loot', `Размещён предмет: ${item.icon} «${item.name}»`);
   toast(`${item.icon} ${item.name} размещён`, 'loot');
+  window.dndOnlineSync?.('loot_place');
 }
 
 function openLootChest(itemId) {
@@ -128,7 +136,7 @@ function openLootChest(itemId) {
   });
   if (contents.length === 0) contents.push({ item: getLootItem('gold_pile'), qty: 1 });
   const rarityLabels = { 'common': 'Обычный', 'uncommon': 'Необычный', 'rare': 'Редкий', 'very-rare': 'Очень редкий', 'legendary': 'Легендарный' };
-  document.getElementById('loot-content-title').innerHTML = `${item.icon} Добыча: ${escapeHtml(item.name)}`;
+  document.getElementById('loot-content-title').innerHTML = `${item.icon} Пример добычи: ${escapeHtml(item.name)}`;
   const list = document.getElementById('loot-content-list');
   list.innerHTML = contents.map(c => `
     <div style="display:flex; align-items:center; gap:10px; padding:8px 10px; background:var(--bg-2); border:1px solid var(--border); border-radius:6px;">

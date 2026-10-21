@@ -152,7 +152,8 @@ function deleteToken(id) {
   }
   const token = state.tokens.find(t => t.id === id);
   if (!token) return;
-  if (!confirm(`Удалить токен «${token.name}»?`)) return;
+  const hasStuff = Array.isArray(token.inventory) && token.inventory.length || InventoryCore.hasCoins(token.coins);
+  if (!confirm(`Удалить токен «${token.name}»?${hasStuff ? '\nВещи этого существа пропадут — сначала можно передать их через инвентарь.' : ''}`)) return;
   state.initiative = state.initiative.filter(i => i.tokenId !== id);
   state.tokens = state.tokens.filter(t => t.id !== id);
   if (state.selectedTokenId === id) state.selectedTokenId = null;

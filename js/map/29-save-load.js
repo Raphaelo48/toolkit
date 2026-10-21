@@ -25,7 +25,7 @@ function buildSaveData() {
     shapes: state.shapes,
     drawSettings: state.drawSettings,
     shapeSettings: state.shapeSettings,
-    inventory: state.inventory || {},
+    party: state.party || {},
   };
 }
 
@@ -50,7 +50,10 @@ function applySaveData(data) {
   state.shapes = Array.isArray(data.shapes) ? data.shapes : [];
   state.drawSettings = { ...state.drawSettings, ...(data.drawSettings || {}) };
   state.shapeSettings = { ...state.shapeSettings, ...(data.shapeSettings || {}) };
-  state.inventory = (data.inventory && typeof data.inventory === "object") ? data.inventory : {};
+  state.party = (data.party && typeof data.party === 'object') ? data.party : {};
+  // Старые сохранения хранили вещи по фишкам — переносим их персонажам
+  if (data.inventory && typeof data.inventory === 'object') state.inventory = data.inventory;
+  InventoryCore.migrate(state);
   state.selectedTokenId = null;
 
   document.getElementById('app').classList.toggle('sidebar-left-collapsed', state.sidebarLeftCollapsed);

@@ -71,6 +71,7 @@ function pasteLastToken(x, y) {
   const src = state.lastTokenPlaced;
   if (!src) return;
   const copy = { ...src, id: state.nextId++, x, y, conditions: src.conditions ? [...src.conditions] : [] };
+  delete copy.inventory; delete copy.coins; delete copy.contents; // копия без вещей; сундук выпадет заново
   state.tokens.push(copy);
   renderTokens();
   selectToken(copy.id);

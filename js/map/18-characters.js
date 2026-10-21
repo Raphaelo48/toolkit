@@ -162,7 +162,16 @@ function deleteCharacter(id) {
   }
   const c = state.characters.find(x => x.id === id);
   if (!c) return;
-  if (!confirm(`Удалить персонажа «${c.name}»?`)) return;
+  const hasStuff = InventoryCore.countItems(c) > 0 || InventoryCore.hasCoins(c.coins);
+  if (!confirm(`Удалить персонажа «${c.name}»?${hasStuff ? '\nЕго вещи и деньги перейдут на общий склад группы.' : ''}`)) return;
+  if (hasStuff) {
+    const party = InventoryCore.ensureParty(state);
+    (c.inventory || []).forEach(item => {
+      const same = !item.custom && party.inventory.find(e => e.id === item.id && !e.custom);
+      if (same) same.qty += item.qty || 1; else party.inventory.push({ ...item });
+    });
+    InventoryCore.COIN_KEYS.forEach(k => { party.coins[k] += Number(c.coins?.[k]) || 0; });
+  }
   state.characters = state.characters.filter(x => x.id !== id);
   state.tokens = state.tokens.filter(t => !(t.kind === 'character' && t.sourceId === id));
   state.initiative = state.initiative.filter(i => !(i.sourceId === id && i.sourceKind === 'character'));
@@ -236,6 +245,7 @@ function renderCharactersList() {
 }
 
 function renderCharacterExpanded(c) {
+  const isOwn = window.dndOnlineGetRole?.() !== 'player' || String(c.ownerId) === String(window.DND_ONLINE?.meta?.player?.id);
   const hpPercent = Math.max(0, Math.min(100, (c.hpCur / c.hpMax) * 100));
   const hpClass = hpPercent < 25 ? 'low' : hpPercent < 50 ? 'mid' : '';
   return `
@@ -277,6 +287,7 @@ function renderCharacterExpanded(c) {
       <div class="expanded-actions" style="margin-top:8px;">
         <button class="btn btn-sm btn-primary" ${isOwn ? '' : 'disabled'} onclick="spawnCharacterToken(${c.id})">На карту</button>
         <button class="btn btn-sm" ${isOwn ? '' : 'disabled'} onclick="openCharacterModal(${c.id})">Изменить</button>
+        ${isOwn ? `<button class="btn btn-sm" onclick="openInventory({kind:'character', id:${Number(c.id)}})">🎒 ${InventoryCore.countItems(c)}</button>` : ''}
       </div>
     </div>
   `;

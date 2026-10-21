@@ -18,7 +18,7 @@
     canvasCache:{ draw:null, fog:null },
     mapSent:null,           // какая картинка карты уже есть на сервере
     synced:false,           // уже получали состояние этой комнаты
-    pickedLoot:new Set(),
+    replaceNext:false,      // следующая отправка заменяет состояние комнаты целиком (загрузка сохранения)
     publishTimer:null, periodicTimer:null, pingTimer:null, canvasTimers:{},
     seq:0
   };
@@ -61,7 +61,7 @@
       shapes:clone(state.shapes),
       drawSettings:clone(state.drawSettings),
       shapeSettings:clone(state.shapeSettings),
-      inventory:clone(state.inventory || {}),
+      party:clone(state.party || {}),
       eventLog:clone(state.eventLog),
     };
   }
@@ -71,17 +71,9 @@
     const ownChars = state.characters.filter(c => String(c.ownerId) === id);
     const ownIds = new Set(ownChars.map(c => String(c.id)));
     const ownTokens = state.tokens.filter(t => t.kind === 'character' && ownIds.has(String(t.sourceId)));
-    const inventory = {};
-    for(const t of ownTokens){
-      const items = state.inventory?.[String(t.id)];
-      if(Array.isArray(items)) inventory[String(t.id)] = items;
-    }
-    return {
-      characters:clone(ownChars),
-      characterTokens:clone(ownTokens),
-      inventory:clone(inventory),
-      pickedLootTokenIds:[...online.pickedLoot]
-    };
+    // Вещи и деньги меняются только действиями инвентаря (см. sendInventoryAction), в патч не входят
+    const chars = clone(ownChars).map(c => { delete c.inventory; delete c.coins; return c; });
+    return { characters:chars, characterTokens:clone(ownTokens) };
   }
 
   const signature = data => { try{ return JSON.stringify(data); }catch{ return ''; } };
@@ -91,6 +83,8 @@
 
   function publishState(reason='change'){
     if(online.applyingRemote) return;
+    // Загруженное сохранение заменяет на сервере всё, включая инвентари
+    if(reason === 'load_game' && isMaster()) online.replaceNext = true;
     clearTimeout(online.publishTimer);
     online.publishTimer = setTimeout(() => publishNow(reason), PUBLISH_DEBOUNCE_MS);
   }
@@ -105,12 +99,13 @@
     if(!force && sig === online.lastSignature) return false;
     if(!ready()){ if(online.synced) online.dirtyOffline = true; return false; }
 
+    const replace = !!online.replaceNext;
     const message = isMaster()
-      ? { type:'state_update', state:payload, baseVersion:online.version, seq:++online.seq, reason }
+      ? { type:'state_update', state:payload, baseVersion:online.version, seq:++online.seq, reason, replace }
       : { type:'player_state_update', patch:payload, baseVersion:online.version, seq:++online.seq, reason };
     if(!send(message)){ if(online.synced) online.dirtyOffline = true; return false; }
     online.lastSignature = sig;
-    online.pickedLoot.clear();
+    online.replaceNext = false;
     // Отложенный снимок устарел: сервер пришлёт итог слияния, если наша версия была не последней
     online.pending = null;
     return true;
@@ -228,13 +223,14 @@
       if(shared.shapeSettings && isMaster() === false) state.shapeSettings = { ...state.shapeSettings, ...shared.shapeSettings };
       if(Array.isArray(shared.diceHistory)) state.diceHistory = shared.diceHistory;
       if(Array.isArray(shared.eventLog)) state.eventLog = shared.eventLog;
-      if(shared.inventory && typeof shared.inventory === 'object') state.inventory = shared.inventory;
+      if(shared.party && typeof shared.party === 'object') state.party = shared.party;
+      if(shared.inventory) state.inventory = shared.inventory; // старый формат
+      window.InventoryCore?.migrate(state);
       if(state.selectedTokenId != null && !state.tokens.some(t => t.id === state.selectedTokenId)) state.selectedTokenId = null;
 
       sizeMapLayers();
       renderAll?.(); drawGrid?.(); renderShapes?.(); updateMapTransform?.(); renderLogFilters?.(); renderLog?.();
-      const invModal = document.getElementById('inventory-modal');
-      if(invModal?.dataset?.tokenId) renderInventoryIfOpen?.(Number(invModal.dataset.tokenId));
+      window.dndInventoryRefresh?.();
       online.lastSignature = currentSignature();
     } catch(err){
       console.error('[D&D Online] apply state failed', err);
@@ -268,6 +264,13 @@
       return;
     }
 
+    if(m.resync){
+      // Сервер отклонил наше действие — возвращаемся к его состоянию
+      online.version = Math.max(online.version, version);
+      online.pending = null;
+      applySharedState(m.state || {});
+      return;
+    }
     if(version && version <= online.version) return; // устаревший снимок
     if(busy()){ online.pending = m; return; }
     // Есть ещё не отправленные свои изменения — сначала отправляем их. Наша версия старше
@@ -283,6 +286,7 @@
 
   function seedRoomFromLocal(){
     online.mapSent = undefined; // заставить отправить картинку карты
+    online.replaceNext = true;  // комната пустая — наше состояние целиком, с инвентарями
     publishNow('seed', true);
     sendCanvasNow('draw');
     sendCanvasNow('fog');
@@ -348,7 +352,6 @@
           online.joinedRoomId = online.meta.room.id;
           online.version = 0; online.lastSignature = ''; online.dirtyOffline = false; online.synced = false;
           online.mapSent = null; online.canvasCache = { draw:null, fog:null }; online.canvasDirty = { draw:false, fog:false };
-          online.pickedLoot.clear();
         }
         if(m.player && online.meta) online.meta.player = { ...online.meta.player, ...m.player };
         online.roomEmpty = !!m.roomEmpty;
@@ -379,6 +382,9 @@
       case 'dice_roll':
         handleDiceRoll(m);
         return;
+      case 'action_error':
+        toastSafe(m.message || 'Действие не выполнено', 'error');
+        return;
       case 'permission_error':
         toastSafe(m.message || 'Недостаточно прав', 'error');
         return;
@@ -389,7 +395,23 @@
 
   online.publishState = publishState;
   online.sendCanvas = sendCanvas;
-  online.notifyLootPicked = id => { if(id != null) online.pickedLoot.add(id); };
+  online.inRoom = () => !!online.meta && !!window.dndOnlineGetRole?.();
+  online.isReady = ready;
+  online.signatureNow = currentSignature;
+  /**
+   * Отправить действие с инвентарём. Локально оно уже применено (мгновенный отклик),
+   * сервер применит его окончательно и пришлёт всем новое состояние.
+   * sigBefore — подпись состояния до локального применения: если других неотправленных
+   * изменений не было, не отправляем лишний снимок.
+   */
+  online.sendInventoryAction = function(action, sigBefore){
+    if(sigBefore != null && sigBefore === online.lastSignature) online.lastSignature = currentSignature();
+    if(!ready() || !send({ type:'inventory_action', action, requestId:++online.seq })){
+      toastSafe('Нет связи с сервером — действие не сохранится', 'error');
+      return false;
+    }
+    return true;
+  };
   online.sendDice = function(result){
     if(!ready()) return;
     send({ type:'dice_roll', playerName:online.meta?.player?.name || 'Игрок', roll:{ ...result, time:Date.now(), modifierStr:result.modifierStr || '' } });

@@ -37,6 +37,14 @@ function renderInfoPanel() {
     }
   }
 
+  if (token.ac != null && token.kind !== 'character') {
+    extraStats += `
+        <div class="stat-box">
+          <div class="stat-label">КД</div>
+          <div class="stat-value">${Number(token.ac)}</div>
+        </div>`;
+  }
+
   const hasHP = token.hpMax != null;
   const hpPercent = hasHP ? Math.max(0, Math.min(100, (token.hpCur / token.hpMax) * 100)) : 0;
   const hpClass = hpPercent < 25 ? 'low' : hpPercent < 50 ? 'mid' : '';
@@ -82,7 +90,7 @@ function renderInfoPanel() {
   }
 
   // Кнопка открыть инвентарь — для персонажей и монстров
-  const canOpenInventory = (token.kind === 'character' || token.kind === 'monster');
+  const canOpenInventory = ['character', 'monster', 'npc', 'token'].includes(token.kind);
   const role = window.dndOnlineGetRole?.();
   const myId = window.DND_ONLINE?.meta?.player?.id;
   const isOwnChar = token.kind === 'character' && String(token.ownerId) === String(myId);
@@ -144,7 +152,7 @@ function renderInfoPanel() {
         <div style="display:flex; gap:6px;">
           <button class="btn btn-sm" style="flex:1;background:var(--bg-3);" onclick="openInventoryModal(${token.id})">
             <svg style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8h14M5 8a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v.01a2 2 0 01-2 2M5 8l1 12a2 2 0 002 2h8a2 2 0 002-2L19 8"/></svg>
-            🎒 Инвентарь (${(state.inventory?.[token.id]||[]).length})
+            🎒 Инвентарь (${InventoryCore.countItems(InventoryCore.resolve(state, { kind: 'token', id: token.id })?.holder)})
           </button>
         </div>
       ` : ''}
@@ -192,6 +200,7 @@ function modTokenHP(id, delta) {
   const diff = token.hpCur - oldHP;
   const sign = diff > 0 ? '+' : '';
   logEvent('combat', `«${token.name}» HP: ${oldHP} → ${token.hpCur} (${sign}${diff})`);
+  window.dndOnlineSync?.('token_hp');
 }
 
 function closeContextMenu() {
@@ -219,11 +228,14 @@ function duplicateToken(id) {
     name: t.name + ' (копия)',
     conditions: t.conditions ? [...t.conditions] : []
   };
+  // Вещи не копируются: иначе предметы размножались бы
+  delete copy.inventory; delete copy.coins; delete copy.contents;
   state.tokens.push(copy);
   renderTokens();
   selectToken(copy.id);
   logEvent('token', `Дублирован токен: «${t.name}»`);
   toast('Токен дублирован');
+  window.dndOnlineSync?.('token_duplicate');
 }
 
 function toggleCondition(tokenId, conditionId) {
@@ -249,6 +261,7 @@ function toggleCondition(tokenId, conditionId) {
   }
   renderTokens();
   renderInfoPanel();
+  window.dndOnlineSync?.('token_condition');
   // Обновить меню, не закрывая его
   const menu = document.getElementById('context-menu');
   if (menu) {

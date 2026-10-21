@@ -289,7 +289,7 @@ function onMessage(ws, ctx, raw) {
             room.run(() => {
                 const base = Number(message.baseVersion);
                 const stale = !Number.isFinite(base) || base !== room.version;
-                const { merged } = room.applyMasterState(message.state, Number.isFinite(base) ? base : -1);
+                const { merged } = room.applyMasterState(message.state, Number.isFinite(base) ? base : -1, { replace: message.replace === true });
                 const snap = room.snapshot({ from: playerId });
                 room.broadcast(snap, ws);
                 // Если мастер работал со старой версией — отдаём ему итог слияния
@@ -307,6 +307,21 @@ function onMessage(ws, ctx, raw) {
                 const snap = room.snapshot({ from: playerId });
                 room.broadcast(snap, ws);
                 room.send(ws, stale || remapped ? snap : { type: 'ack', version: room.version, seq: message.seq });
+            });
+            return;
+
+        // Действия с инвентарём: передать, выбросить, подобрать, взять из сундука, деньги
+        case 'inventory_action':
+            room.run(() => {
+                const action = message.action && typeof message.action === 'object' ? message.action : null;
+                const res = room.applyInventoryAction(action, { role, playerId, name: ctx.name });
+                if (!res.ok) {
+                    room.send(ws, { type: 'action_error', message: res.error || 'Действие не выполнено', requestId: message.requestId });
+                    room.send(ws, room.snapshot({ resync: true })); // вернуть клиенту настоящее состояние
+                    return;
+                }
+                // Всем, включая отправителя: так у всех одинаковые id и порядок
+                room.broadcast(room.snapshot({ from: playerId, requestId: message.requestId }));
             });
             return;
 

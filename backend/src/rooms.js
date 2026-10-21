@@ -3,7 +3,19 @@
 // изменения одной комнаты обрабатываются строго по очереди, а в базу состояние
 // пишется пакетно (не чаще раза в SAVE_DELAY_MS) и обязательно при остановке.
 
+import fs from 'fs';
+import path from 'path';
+import vm from 'vm';
+import { fileURLToPath } from 'url';
 import { store } from './store/index.js';
+
+// Правила инвентаря — общий файл с браузером (js/shared/inventory-core.js)
+const Inv = (() => {
+    const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'js', 'shared', 'inventory-core.js');
+    const sandbox = { module: { exports: {} } };
+    vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: file });
+    return sandbox.module.exports;
+})();
 
 const SAVE_DELAY_MS = 1000;
 const UNLOAD_AFTER_MS = 10 * 60 * 1000;
@@ -11,6 +23,10 @@ const DICE_HISTORY_LIMIT = 20;
 const MAX_PLAYER_CHARACTERS = 3;
 // Эти поля персонажа меняет только мастер
 const MASTER_ONLY_CHARACTER_FIELDS = ['xp', 'level', 'hpMax'];
+// Эти поля меняются только действиями инвентаря на сервере — никакой снимок их не перезапишет
+const SERVER_OWNED_CHARACTER_FIELDS = ['inventory', 'coins'];
+const SERVER_OWNED_TOKEN_FIELDS = ['inventory', 'coins', 'contents', 'item', 'qty'];
+const ACTION_HISTORY_LIMIT = 300;
 
 const rooms = new Map(); // roomId(string) → Room
 
@@ -23,6 +39,7 @@ class Room {
         this.canvases = { draw: null, fog: null };
         this.clients = new Set();        // ws
         this.playerPatchVersion = new Map(); // playerId → версия последнего изменения игрока
+        this.actionHistory = [];              // { version, addedTokens, removedTokenIds, logEntry } — для слияния со старыми снимками
         this.queue = Promise.resolve();
         this.saveTimer = null;
         this.dirty = false;
@@ -69,10 +86,23 @@ class Room {
 
     /* ---------- изменения ---------- */
 
-    applyMasterState(incoming, baseVersion) {
+    applyMasterState(incoming, baseVersion, { replace = false } = {}) {
         const next = sanitizeState(incoming);
         const current = this.state || {};
         let merged = false;
+        Inv.migrate(next);
+
+        if (replace) {
+            // Мастер загрузил сохранение — оно заменяет всё, включая инвентари
+            next.diceHistory = Array.isArray(current.diceHistory) ? current.diceHistory : (next.diceHistory || []);
+            next.nextId = Math.max(Number(next.nextId) || 1, maxId(next) + 1);
+            this.state = next;
+            this.version++;
+            this.actionHistory = [];
+            this.playerPatchVersion.clear();
+            this.markDirty();
+            return { merged: true };
+        }
 
         // Если мастер не видел свежих изменений игроков — сохраняем их, а не затираем
         for (const [playerId, v] of this.playerPatchVersion) {
@@ -81,6 +111,10 @@ class Room {
                 merged = true;
             }
         }
+        // Инвентари, деньги и сундуки — только с сервера
+        if (keepServerOwned(next, current)) merged = true;
+        // Действия, которых мастер ещё не видел, повторяем поверх его снимка
+        if (replayActions(next, this.actionHistory.filter(a => a.version > baseVersion))) merged = true;
         // История кубиков ведётся сервером
         next.diceHistory = Array.isArray(current.diceHistory) ? current.diceHistory : (next.diceHistory || []);
         next.nextId = Math.max(Number(next.nextId) || 1, Number(current.nextId) || 1, maxId(next) + 1);
@@ -98,6 +132,28 @@ class Room {
         this.playerPatchVersion.set(String(playerId), this.version);
         this.markDirty();
         return { remapped };
+    }
+
+    /** Действие с инвентарём. Выполняется строго по очереди и сразу становится окончательным. */
+    applyInventoryAction(action, actor) {
+        const res = Inv.apply(this.state, action, actor, {
+            allocId: () => {
+                const id = Math.max(Number(this.state.nextId) || 1, maxId(this.state) + 1);
+                this.state.nextId = id + 1;
+                return id;
+            }
+        });
+        if (!res.ok) return res;
+        this.version++;
+        this.actionHistory.push({
+            version: this.version,
+            addedTokens: clone(res.addedTokens),
+            removedTokenIds: res.removedTokenIds.map(String),
+            logEntry: res.logEntry || null
+        });
+        if (this.actionHistory.length > ACTION_HISTORY_LIMIT) this.actionHistory.splice(0, this.actionHistory.length - ACTION_HISTORY_LIMIT);
+        this.markDirty();
+        return res;
     }
 
     addDiceRoll(entry) {
@@ -180,6 +236,8 @@ export async function getRoom(roomId) {
                 room.dirty = true;
             }
             if (room.version === 0 && Object.keys(room.state).length) room.version = 1;
+            // Старый формат инвентаря (по фишкам) → вещи у персонажей
+            if (Inv.migrate(room.state)) room.dirty = true;
         }
         rooms.set(id, room);
         return room;
@@ -219,6 +277,75 @@ function maxId(state) {
 
 const isOwnChar = (c, playerId) => String(c?.ownerId) === String(playerId);
 
+function copyFields(target, source, fields) {
+    for (const f of fields) {
+        if (source && f in source) target[f] = clone(source[f]);
+        else delete target[f];
+    }
+}
+
+/**
+ * Вернуть в снимок мастера то, что хранит только сервер: вещи и деньги персонажей и фишек,
+ * содержимое сундуков, общий склад. Вещи удалённых мастером персонажей переезжают на склад.
+ */
+function keepServerOwned(next, current) {
+    let changed = false;
+    const curChars = new Map((current.characters || []).map(c => [String(c.id), c]));
+    const curTokens = new Map((current.tokens || []).map(t => [String(t.id), t]));
+    const nextChars = Array.isArray(next.characters) ? next.characters : [];
+    const nextTokens = Array.isArray(next.tokens) ? next.tokens : [];
+
+    for (const c of nextChars) {
+        const cur = curChars.get(String(c.id));
+        if (cur) copyFields(c, cur, SERVER_OWNED_CHARACTER_FIELDS);
+    }
+    for (const t of nextTokens) {
+        const cur = curTokens.get(String(t.id));
+        if (cur) copyFields(t, cur, SERVER_OWNED_TOKEN_FIELDS);
+    }
+    next.party = clone(current.party) || next.party || {};
+    Inv.ensureParty(next);
+
+    const nextCharIds = new Set(nextChars.map(c => String(c.id)));
+    for (const [id, c] of curChars) {
+        if (!nextCharIds.has(id) && moveToParty(next, c)) changed = true;
+    }
+    return changed;
+}
+
+function moveToParty(state, holder) {
+    const party = Inv.ensureParty(state);
+    let moved = false;
+    for (const item of Array.isArray(holder.inventory) ? holder.inventory : []) {
+        const existing = item.custom ? null : party.inventory.find(e => e.id === item.id && !e.custom);
+        if (existing) existing.qty += Number(item.qty) || 1; else party.inventory.push(clone(item));
+        moved = true;
+    }
+    const coins = Inv.normCoins(holder.coins);
+    for (const k of Inv.COIN_KEYS) if (coins[k]) { party.coins[k] += coins[k]; moved = true; }
+    return moved;
+}
+
+/** Повторить результат действий (появившиеся/исчезнувшие фишки, записи журнала) поверх старого снимка. */
+function replayActions(next, actions) {
+    if (!actions.length) return false;
+    next.tokens = Array.isArray(next.tokens) ? next.tokens : [];
+    next.eventLog = Array.isArray(next.eventLog) ? next.eventLog : [];
+    for (const a of actions) {
+        for (const t of a.addedTokens) {
+            if (!next.tokens.some(x => String(x.id) === String(t.id))) next.tokens.push(clone(t));
+        }
+        if (a.removedTokenIds.length) {
+            const removed = new Set(a.removedTokenIds);
+            next.tokens = next.tokens.filter(t => !removed.has(String(t.id)));
+        }
+        if (a.logEntry && !next.eventLog.some(e => e && e.id === a.logEntry.id)) next.eventLog.push(clone(a.logEntry));
+    }
+    next.eventLog.sort((x, y) => (Number(y?.timestamp) || 0) - (Number(x?.timestamp) || 0));
+    if (next.eventLog.length > 500) next.eventLog.length = 500;
+    return true;
+}
+
 /** Перенести в next персонажей игрока, их токены и инвентарь из current. */
 function keepPlayerEntities(next, current, playerId) {
     const curChars = Array.isArray(current.characters) ? current.characters : [];
@@ -246,13 +373,6 @@ function keepPlayerEntities(next, current, playerId) {
         ...clone(ownTokens)
     ];
 
-    if (current.inventory && typeof current.inventory === 'object') {
-        next.inventory = next.inventory && typeof next.inventory === 'object' ? next.inventory : {};
-        for (const t of ownTokens) {
-            const key = String(t.id);
-            if (key in current.inventory) next.inventory[key] = clone(current.inventory[key]);
-        }
-    }
 }
 
 export function mergePlayerPatch(currentState, patch, playerId) {
@@ -274,14 +394,22 @@ export function mergePlayerPatch(currentState, patch, playerId) {
         const existing = ownCurrent.get(String(c.id));
         if (existing) {
             for (const f of MASTER_ONLY_CHARACTER_FIELDS) if (f in existing) c[f] = existing[f];
+            copyFields(c, existing, SERVER_OWNED_CHARACTER_FIELDS);
             if (Number(c.hpCur) > Number(c.hpMax)) c.hpCur = c.hpMax;
             idMap.set(String(raw.id), existing.id);
             return c;
         }
         c.id = allocId();
+        // Новый персонаж начинает с пустыми карманами: вещи выдаются только действиями
+        c.inventory = [];
+        c.coins = Inv.normCoins(null);
         idMap.set(String(raw.id), c.id);
         return c;
     });
+
+    // Игрок удалил своего персонажа — его вещи не пропадают, а уходят на общий склад
+    const keptIds = new Set(normalizedChars.map(c => String(c.id)));
+    for (const [id, c] of ownCurrent) if (!keptIds.has(id)) moveToParty(current, c);
 
     current.characters = [
         ...currentChars.filter(c => !isOwnChar(c, playerId)),
@@ -291,15 +419,14 @@ export function mergePlayerPatch(currentState, patch, playerId) {
     const ownTokenIds = new Set(
         currentTokens.filter(t => t?.kind === 'character' && ownCurrent.has(String(t.sourceId))).map(t => String(t.id))
     );
-    const tokenIdMap = new Map();
     const normalizedTokens = incomingTokens
         .filter(t => t && t.kind === 'character')
         .map(raw => {
             const sourceId = idMap.get(String(raw.sourceId));
             if (sourceId == null) return null;
             const t = { ...raw, sourceId, ownerId: playerId };
+            for (const f of SERVER_OWNED_TOKEN_FIELDS) delete t[f];
             if (!ownTokenIds.has(String(raw.id))) t.id = allocId();
-            tokenIdMap.set(String(raw.id), t.id);
             return t;
         })
         .filter(Boolean);
@@ -308,22 +435,6 @@ export function mergePlayerPatch(currentState, patch, playerId) {
         ...currentTokens.filter(t => !(t?.kind === 'character' && ownTokenIds.has(String(t.id)))),
         ...normalizedTokens
     ];
-
-    // Инвентарь своих токенов
-    if (patch?.inventory && typeof patch.inventory === 'object') {
-        current.inventory = current.inventory && typeof current.inventory === 'object' ? current.inventory : {};
-        for (const [rawKey, items] of Object.entries(patch.inventory)) {
-            const key = String(tokenIdMap.get(String(rawKey)) ?? '');
-            if (!key || !Array.isArray(items)) continue;
-            current.inventory[key] = items.slice(0, 200);
-        }
-    }
-
-    // Подобранный с карты лут
-    if (Array.isArray(patch?.pickedLootTokenIds) && patch.pickedLootTokenIds.length) {
-        const picked = new Set(patch.pickedLootTokenIds.map(String));
-        current.tokens = current.tokens.filter(t => !(t?.kind === 'loot' && picked.has(String(t.id))));
-    }
 
     current.nextId = nextId;
     return { state: current, remapped };
