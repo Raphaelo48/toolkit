@@ -1,544 +1,451 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import pg from 'pg';
 import { WebSocketServer } from 'ws';
 import http from 'http';
 import crypto from 'crypto';
 
 dotenv.config();
 
-const { Pool } = pg;
+const { pool, query, ensureSchema } = await import('./db.js');
+const { getRoom, getLoadedRoom, flushAll } = await import('./rooms.js');
 
 const PORT = Number(process.env.PORT || 5000);
+const HEARTBEAT_MS = 25_000;
+const MAX_WS_MESSAGE = 32 * 1024 * 1024; // карта или холст в base64 могут весить несколько МБ
 
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_URL?.includes('localhost')
-        ? false
-        : { rejectUnauthorized: false }
-});
+// Ни одна ошибка не должна молча ронять сервер посреди игры
+process.on('unhandledRejection', err => console.error('[unhandledRejection]', err));
+process.on('uncaughtException', err => console.error('[uncaughtException]', err));
 
 const app = express();
-
+app.set('trust proxy', 1);
 app.use(cors({
-    origin: process.env.CORS_ORIGIN
-        ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
-        : true,
+    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map(s => s.trim()) : true,
     credentials: true
 }));
-
 app.use(express.json({ limit: '2mb' }));
 
 const server = http.createServer(app);
-
-const wss = new WebSocketServer({ server, path: '/ws' });
-
-const sockets = new Map(); // roomId → Set<ws>
-
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: MAX_WS_MESSAGE, perMessageDeflate: false });
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
-function generateRoomCode() {
-    return crypto.randomBytes(4).toString('hex').toUpperCase().slice(0, 6);
+const newToken = () => crypto.randomBytes(24).toString('base64url');
+const newRoomCode = () => {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // без похожих 0/O и 1/I
+    return Array.from(crypto.randomBytes(6), b => alphabet[b % alphabet.length]).join('');
+};
+const clean = (v, max) => String(v ?? '').trim().slice(0, max);
+const httpError = (status, message) => Object.assign(new Error(message), { status });
+
+// Express 5 сам ловит ошибки async-обработчиков, обёртка оставлена для наглядности
+const route = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+function sessionPayload(row) {
+    return {
+        campaign: { id: row.campaign_id, name: row.campaign_name, description: row.campaign_description || '' },
+        room: { id: row.room_id, code: row.room_code, campaign_id: row.campaign_id },
+        player: { id: row.user_id, name: row.username, role: row.role, token: row.token }
+    };
 }
 
-function broadcast(roomId, message, excludeWs = null) {
-    const clients = sockets.get(String(roomId));
-    if (!clients) return;
-    const data = JSON.stringify(message);
-    for (const ws of clients) {
-        if (ws !== excludeWs && ws.readyState === 1) {
-            ws.send(data);
-        }
+const MEMBER_SELECT = `
+    SELECT cm.user_id, cm.role, cm.token, u.username,
+           r.id AS room_id, r.room_code, c.id AS campaign_id,
+           c.name AS campaign_name, c.description AS campaign_description
+      FROM campaign_members cm
+      JOIN users u ON u.id = cm.user_id
+      JOIN campaigns c ON c.id = cm.campaign_id
+      JOIN rooms r ON r.campaign_id = c.id`;
+
+async function memberByToken(token) {
+    if (!token) return null;
+    const r = await query(`${MEMBER_SELECT} WHERE cm.token = $1 LIMIT 1`, [token]);
+    return r.rows[0] || null;
+}
+
+async function memberInRoom(roomId, userId) {
+    const r = await query(`${MEMBER_SELECT} WHERE r.id = $1 AND cm.user_id = $2 LIMIT 1`, [roomId, userId]);
+    return r.rows[0] || null;
+}
+
+async function ensureToken(member) {
+    if (member.token) return member.token;
+    const token = newToken();
+    await query('UPDATE campaign_members SET token = $1 WHERE campaign_id = $2 AND user_id = $3',
+        [token, member.campaign_id, member.user_id]);
+    member.token = token;
+    return token;
+}
+
+async function playersOf(roomId) {
+    const r = await query(
+        `SELECT u.id, u.username AS name, cm.role, cm.joined_at
+           FROM campaign_members cm JOIN users u ON u.id = cm.user_id
+          WHERE cm.campaign_id = (SELECT campaign_id FROM rooms WHERE id = $1)
+          ORDER BY (cm.role = 'master') DESC, cm.joined_at`,
+        [roomId]
+    );
+    const online = getLoadedRoom(roomId)?.onlinePlayerIds() || new Set();
+    return r.rows.map(p => ({ ...p, online: online.has(String(p.id)) }));
+}
+
+async function notifyPlayers(roomId) {
+    const room = getLoadedRoom(roomId);
+    if (!room) return;
+    try {
+        room.broadcast({ type: 'players_updated', players: await playersOf(roomId) });
+    } catch (err) {
+        console.error('notifyPlayers:', err.message);
     }
 }
 
-async function getRoomState(roomId) {
-    const result = await pool.query(
-        'SELECT state, updated_at FROM room_state WHERE room_id = $1',
-        [roomId]
-    );
-    if (result.rowCount === 0) return { state: {}, updated_at: null };
-    return result.rows[0];
-}
-
-async function getMemberRole(campaignId, userId) {
-    const result = await pool.query(
-        'SELECT role FROM campaign_members WHERE campaign_id = $1 AND user_id = $2',
-        [campaignId, userId]
-    );
-    return result.rowCount ? result.rows[0].role : null;
-}
-
-async function getRoomInfo(roomId) {
-    const result = await pool.query(
-        'SELECT id, campaign_id, room_code FROM rooms WHERE id = $1',
-        [roomId]
-    );
-    return result.rowCount ? result.rows[0] : null;
-}
-
-function mergePlayerPatch(currentState, patch, playerId) {
-    const current = JSON.parse(JSON.stringify(currentState || {}));
-    const incomingChars = Array.isArray(patch?.characters) ? patch.characters.slice(0, 3) : [];
-    const incomingTokens = Array.isArray(patch?.characterTokens) ? patch.characterTokens : [];
-
-    const currentChars = Array.isArray(current.characters) ? current.characters : [];
-    const currentTokens = Array.isArray(current.tokens) ? current.tokens : [];
-    const ownCurrentChars = currentChars.filter(c => String(c.ownerId) === String(playerId));
-    const ownIds = new Set(ownCurrentChars.map(c => String(c.id)));
-
-    let nextId = Number.isFinite(current.nextId) ? Math.max(1, current.nextId) : 1;
-    const usedIds = new Set([
-        ...currentChars.map(c => Number(c.id)).filter(Number.isFinite),
-        ...currentTokens.map(t => Number(t.id)).filter(Number.isFinite),
-        ...(Array.isArray(current.shapes) ? current.shapes.map(x => Number(x.id)).filter(Number.isFinite) : [])
-    ]);
-    const allocId = () => {
-        while (usedIds.has(nextId)) nextId++;
-        usedIds.add(nextId);
-        return nextId++;
-    };
-
-    const idMap = new Map();
-    const normalizedChars = incomingChars.map(raw => {
-        const c = { ...raw, ownerId: playerId };
-        const oldId = Number(c.id);
-        if (ownIds.has(String(oldId))) {
-            idMap.set(String(oldId), oldId);
-            return c;
-        }
-        const newId = allocId();
-        idMap.set(String(oldId), newId);
-        c.id = newId;
-        return c;
-    });
-
-    current.characters = [
-        ...currentChars.filter(c => String(c.ownerId) !== String(playerId)),
-        ...normalizedChars
-    ];
-
-    const normalizedTokens = incomingTokens
-        .filter(t => t && t.kind === 'character')
-        .map(raw => {
-            const t = { ...raw };
-            const mappedSource = idMap.get(String(t.sourceId));
-            if (mappedSource == null) return null;
-            t.sourceId = mappedSource;
-            t.ownerId = playerId;
-            const oldId = Number(t.id);
-            const existing = currentTokens.find(x => Number(x.id) === oldId && String(x.ownerId) === String(playerId));
-            if (existing) return t;
-            t.id = allocId();
-            return t;
-        })
-        .filter(Boolean);
-
-    const ownCharacterIds = new Set(normalizedChars.map(c => String(c.id)));
-    current.tokens = [
-        ...currentTokens.filter(t => !(t.kind === 'character' && String(t.ownerId) === String(playerId))),
-        ...normalizedTokens.filter(t => ownCharacterIds.has(String(t.sourceId)))
-    ];
-
-    // nextId: берём максимум между текущим серверным и вычисленным — предотвращает откат
-    current.nextId = Math.max(current.nextId || 1, nextId);
-    return current;
-}
-
-async function saveRoomState(roomId, state) {
-    await pool.query(
-        'INSERT INTO room_state (room_id, state, updated_at) ' +
-        'VALUES ($1, $2::jsonb, NOW()) ' +
-        'ON CONFLICT (room_id) DO UPDATE SET ' +
-        'state = EXCLUDED.state, updated_at = NOW()',
-        [roomId, JSON.stringify(state || {})]
-    );
-}
-
-
 /* =========================================================
-   HEALTH
+   HTTP API
 ========================================================= */
+
+app.get('/', (_req, res) => res.json({ ok: true, service: 'dnd-toolkit-backend' }));
 
 app.get('/api/health', async (_req, res) => {
     try {
-        await pool.query('SELECT 1');
+        await query('SELECT 1');
         res.json({ success: true, database: 'connected' });
     } catch (error) {
-        console.error('Health error:', error);
         res.status(503).json({ success: false, database: 'disconnected', error: error.message });
     }
 });
 
-
-/* =========================================================
-   CREATE CAMPAIGN
-========================================================= */
-
-app.post('/api/campaigns', async (req, res) => {
-    const { name, description = '', masterName } = req.body || {};
-
-    if (!name || !masterName) {
-        return res.status(400).json({ error: 'Название кампании и имя мастера обязательны' });
-    }
+// Создать кампанию (создатель становится мастером)
+app.post('/api/campaigns', route(async (req, res) => {
+    const name = clean(req.body?.name, 120);
+    const description = clean(req.body?.description, 2000);
+    const masterName = clean(req.body?.masterName, 80);
+    if (!name || !masterName) throw httpError(400, 'Название кампании и имя мастера обязательны');
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-
-        const userResult = await client.query(
-            'INSERT INTO users (username) VALUES ($1) RETURNING *',
-            [masterName]
-        );
-        const user = userResult.rows[0];
-
-        const campaignResult = await client.query(
+        const user = (await client.query('INSERT INTO users (username) VALUES ($1) RETURNING *', [masterName])).rows[0];
+        const campaign = (await client.query(
             'INSERT INTO campaigns (name, description, master_user_id) VALUES ($1, $2, $3) RETURNING *',
             [name, description, user.id]
-        );
-        const campaign = campaignResult.rows[0];
-
+        )).rows[0];
+        const token = newToken();
         await client.query(
-            'INSERT INTO campaign_members (campaign_id, user_id, role) VALUES ($1, $2, $3)',
-            [campaign.id, user.id, 'master']
+            'INSERT INTO campaign_members (campaign_id, user_id, role, token) VALUES ($1, $2, $3, $4)',
+            [campaign.id, user.id, 'master', token]
         );
 
         let room = null;
-        for (let i = 0; i < 10; i++) {
-            const roomCode = generateRoomCode();
+        for (let i = 0; i < 10 && !room; i++) {
+            await client.query('SAVEPOINT code_try');
             try {
-                const roomResult = await client.query(
-                    'INSERT INTO rooms (campaign_id, room_code) VALUES ($1, $2) RETURNING *',
-                    [campaign.id, roomCode]
-                );
-                room = roomResult.rows[0];
-                break;
+                room = (await client.query(
+                    'INSERT INTO rooms (campaign_id, room_code) VALUES ($1, $2) RETURNING *', [campaign.id, newRoomCode()]
+                )).rows[0];
             } catch (error) {
                 if (error.code !== '23505') throw error;
+                await client.query('ROLLBACK TO SAVEPOINT code_try');
             }
         }
-
         if (!room) throw new Error('Не удалось создать уникальный код комнаты');
 
-        await client.query(
-            'INSERT INTO room_state (room_id, state) VALUES ($1, $2::jsonb) ON CONFLICT (room_id) DO NOTHING',
-            [room.id, '{}']
-        );
-
+        await client.query('INSERT INTO room_state (room_id) VALUES ($1) ON CONFLICT DO NOTHING', [room.id]);
         await client.query('COMMIT');
 
         res.status(201).json({
-            campaign,
-            room: { id: room.id, code: room.room_code, campaign_id: room.campaign_id },
-            player: { id: user.id, name: user.username, role: 'master' }
+            campaign: { id: campaign.id, name: campaign.name, description: campaign.description },
+            room: { id: room.id, code: room.room_code, campaign_id: campaign.id },
+            player: { id: user.id, name: user.username, role: 'master', token }
         });
-
     } catch (error) {
-        await client.query('ROLLBACK');
-        console.error('Create campaign error:', error);
-        res.status(500).json({ error: error.message || 'Не удалось создать кампанию' });
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
     } finally {
         client.release();
     }
-});
+}));
 
+// Войти в комнату по коду. Повторный вход с тем же именем возвращает того же игрока.
+app.post('/api/rooms/join', route(async (req, res) => {
+    const roomCode = clean(req.body?.code, 8).toUpperCase();
+    const name = clean(req.body?.playerName, 80);
+    const token = clean(req.body?.token, 100);
+    if (!roomCode || !name) throw httpError(400, 'Код комнаты и имя обязательны');
 
-/* =========================================================
-   GET CAMPAIGNS
-========================================================= */
+    const roomRow = (await query(
+        `SELECT r.id, r.room_code, r.campaign_id, c.name AS campaign_name, c.description AS campaign_description
+           FROM rooms r JOIN campaigns c ON c.id = r.campaign_id WHERE r.room_code = $1`, [roomCode]
+    )).rows[0];
+    if (!roomRow) throw httpError(404, 'Комната не найдена. Проверьте код.');
 
-app.get('/api/campaigns', async (_req, res) => {
-    try {
-        const result = await pool.query(
-            'SELECT c.*, COUNT(cm.user_id)::int AS player_count ' +
-            'FROM campaigns c LEFT JOIN campaign_members cm ON cm.campaign_id = c.id ' +
-            'GROUP BY c.id ORDER BY c.created_at DESC'
-        );
-        res.json({ campaigns: result.rows });
-    } catch (error) {
-        console.error('Get campaigns error:', error);
-        res.status(500).json({ error: 'Не удалось получить кампании' });
-    }
-});
-
-
-/* =========================================================
-   JOIN ROOM
-========================================================= */
-
-app.post('/api/rooms/join', async (req, res) => {
-    const { code: rawCode, playerName } = req.body || {};
-    const roomCode = String(rawCode || '').trim().toUpperCase();
-    const name = String(playerName || '').trim();
-
-    if (!roomCode || !name) {
-        return res.status(400).json({ error: 'Код комнаты и имя обязательны' });
+    // 1. Уже есть сохранённая сессия этого браузера в этой комнате
+    const byToken = await memberByToken(token);
+    if (byToken && String(byToken.room_id) === String(roomRow.id)) {
+        return res.json(sessionPayload(byToken));
     }
 
-    try {
-        const roomResult = await pool.query(
-            'SELECT r.*, c.name AS campaign_name, c.description AS campaign_description ' +
-            'FROM rooms r JOIN campaigns c ON c.id = r.campaign_id WHERE r.room_code = $1',
-            [roomCode]
-        );
-
-        if (roomResult.rowCount === 0) {
-            return res.status(404).json({ error: 'Комната не найдена' });
+    // 2. Участник с таким именем уже есть
+    const existing = (await query(
+        `${MEMBER_SELECT} WHERE r.id = $1 AND lower(u.username) = lower($2) ORDER BY cm.joined_at LIMIT 1`,
+        [roomRow.id, name]
+    )).rows[0];
+    if (existing) {
+        if (existing.role === 'master') {
+            throw httpError(409, 'Это имя мастера. Мастер входит по своей ссылке (кнопка «Ссылка для входа» в панели комнаты).');
         }
-
-        const room = roomResult.rows[0];
-
-        const userResult = await pool.query(
-            'INSERT INTO users (username) VALUES ($1) RETURNING *',
-            [name]
-        );
-        const user = userResult.rows[0];
-
-        await pool.query(
-            'INSERT INTO campaign_members (campaign_id, user_id, role) VALUES ($1, $2, $3)',
-            [room.campaign_id, user.id, 'player']
-        );
-
-        broadcast(room.id, { type: 'players_updated' });
-
-        res.json({
-            campaign: { id: room.campaign_id, name: room.campaign_name, description: room.campaign_description },
-            room: { id: room.id, code: room.room_code, campaign_id: room.campaign_id },
-            player: { id: user.id, name: user.username, role: 'player' }
-        });
-
-    } catch (error) {
-        console.error('Join room error:', error);
-        res.status(500).json({ error: error.message || 'Не удалось подключиться к комнате' });
-    }
-});
-
-
-/* =========================================================
-   GET PLAYERS
-========================================================= */
-
-app.get('/api/rooms/:roomId/players', async (req, res) => {
-    try {
-        const result = await pool.query(
-            'SELECT u.id, u.username AS name, cm.role, cm.joined_at ' +
-            'FROM campaign_members cm JOIN users u ON u.id = cm.user_id ' +
-            'WHERE cm.campaign_id = (SELECT campaign_id FROM rooms WHERE id = $1) ' +
-            'ORDER BY cm.joined_at',
-            [req.params.roomId]
-        );
-        res.json({ players: result.rows });
-    } catch (error) {
-        console.error('Get players error:', error);
-        res.status(500).json({ error: 'Не удалось получить список игроков' });
-    }
-});
-
-
-/* =========================================================
-   DELETE PLAYER
-========================================================= */
-
-app.delete('/api/rooms/:roomId/players/:playerId', async (req, res) => {
-    try {
-        const roomResult = await pool.query(
-            'SELECT campaign_id FROM rooms WHERE id = $1',
-            [req.params.roomId]
-        );
-        if (roomResult.rowCount === 0) {
-            return res.status(404).json({ error: 'Комната не найдена' });
+        const online = getLoadedRoom(roomRow.id)?.onlinePlayerIds() || new Set();
+        if (online.has(String(existing.user_id))) {
+            throw httpError(409, 'Игрок с таким именем уже в комнате. Выберите другое имя.');
         }
-
-        await pool.query(
-            'DELETE FROM campaign_members WHERE campaign_id = $1 AND user_id = $2',
-            [roomResult.rows[0].campaign_id, req.params.playerId]
-        );
-
-        broadcast(req.params.roomId, { type: 'players_updated' });
-        res.json({ success: true });
-
-    } catch (error) {
-        console.error('Delete player error:', error);
-        res.status(500).json({ error: 'Не удалось удалить игрока' });
+        await ensureToken(existing);
+        return res.json(sessionPayload(existing));
     }
-});
 
+    // 3. Новый игрок
+    const user = (await query('INSERT INTO users (username) VALUES ($1) RETURNING *', [name])).rows[0];
+    const newMemberToken = newToken();
+    await query(
+        'INSERT INTO campaign_members (campaign_id, user_id, role, token) VALUES ($1, $2, $3, $4)',
+        [roomRow.campaign_id, user.id, 'player', newMemberToken]
+    );
+    await notifyPlayers(roomRow.id);
+    res.json(sessionPayload({
+        ...roomRow, room_id: roomRow.id, user_id: user.id, username: user.username, role: 'player', token: newMemberToken
+    }));
+}));
 
-/* =========================================================
-   GET ROOM STATE
-========================================================= */
+// Вернуться в комнату по сохранённому токену (перезагрузка страницы, другое устройство)
+app.post('/api/session/resume', route(async (req, res) => {
+    const member = await memberByToken(clean(req.body?.token, 100));
+    if (!member) throw httpError(404, 'Сессия не найдена. Войдите в комнату заново.');
+    res.json(sessionPayload(member));
+}));
 
-app.get('/api/rooms/:roomId/state', async (req, res) => {
-    try {
-        const result = await getRoomState(req.params.roomId);
-        res.json({ state: result.state || {}, updatedAt: result.updated_at });
-    } catch (error) {
-        console.error('Get room state error:', error);
-        res.status(500).json({ error: 'Не удалось получить состояние комнаты' });
+app.get('/api/rooms/:roomId/players', route(async (req, res) => {
+    res.json({ players: await playersOf(req.params.roomId) });
+}));
+
+// Выйти из комнаты (сам игрок) или исключить игрока (мастер)
+app.delete('/api/rooms/:roomId/players/:playerId', route(async (req, res) => {
+    const { roomId, playerId } = req.params;
+    const actor = await memberByToken(clean(req.get('X-Player-Token'), 100));
+    if (!actor || String(actor.room_id) !== String(roomId)) throw httpError(401, 'Нужно войти в комнату');
+    if (String(actor.user_id) !== String(playerId) && actor.role !== 'master') throw httpError(403, 'Недостаточно прав');
+
+    const target = await memberInRoom(roomId, playerId);
+    if (!target) return res.json({ success: true });
+    if (target.role === 'master') throw httpError(400, 'Мастер не может покинуть свою кампанию');
+
+    await query('DELETE FROM campaign_members WHERE campaign_id = $1 AND user_id = $2', [target.campaign_id, playerId]);
+    const room = getLoadedRoom(roomId);
+    for (const ws of room?.clients || []) {
+        if (String(ws.meta?.playerId) === String(playerId)) ws.close(4003, 'removed');
     }
+    await notifyPlayers(roomId);
+    res.json({ success: true });
+}));
+
+app.get('/api/rooms/:roomId/state', route(async (req, res) => {
+    const room = await getRoom(req.params.roomId);
+    res.json({ state: room.state, version: room.version });
+}));
+
+app.use((_req, res) => res.status(404).json({ error: 'Не найдено' }));
+
+app.use((error, _req, res, _next) => {
+    const status = error.status || (error.type === 'entity.too.large' ? 413 : 500);
+    if (status >= 500) console.error('Server error:', error);
+    res.status(status).json({ error: status >= 500 ? 'Ошибка сервера. Попробуйте ещё раз.' : error.message });
 });
-
-
-/* =========================================================
-   SAVE ROOM STATE
-========================================================= */
-
-app.put('/api/rooms/:roomId/state', async (req, res) => {
-    try {
-        const roomId = req.params.roomId;
-        const state = req.body?.state || {};
-        await saveRoomState(roomId, state);
-        broadcast(roomId, {
-            type: 'state_snapshot', state,
-            from: req.body?.from || null,
-            updatedAt: new Date().toISOString()
-        });
-        res.json({ success: true });
-    } catch (error) {
-        console.error('Save room state error:', error);
-        res.status(500).json({ error: 'Не удалось сохранить состояние комнаты' });
-    }
-});
-
 
 /* =========================================================
    WEBSOCKET
 ========================================================= */
 
-wss.on('connection', async (ws, req) => {
+wss.on('connection', (ws, req) => {
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+    ws.on('error', err => console.warn('[ws] error:', err.message));
+
+    // Сообщения, пришедшие до окончания проверки доступа, не теряем
+    const early = [];
+    let handle = raw => early.push(raw);
+    ws.on('message', raw => handle(raw));
+
     const url = new URL(req.url, 'http://localhost');
     const roomId = url.searchParams.get('roomId');
     const playerId = url.searchParams.get('playerId');
+    const token = url.searchParams.get('token');
 
-    if (!roomId || !playerId) { ws.close(1008, 'roomId/playerId required'); return; }
+    authenticate(ws, roomId, playerId, token)
+        .then(ctx => {
+            if (!ctx) return;
+            handle = raw => onMessage(ws, ctx, raw);
+            early.splice(0).forEach(handle);
+        })
+        .catch(err => {
+            console.error('[ws] connect error:', err);
+            ws.close(1011, 'server error');
+        });
+});
 
-    const roomInfo = await getRoomInfo(roomId);
-    if (!roomInfo) { ws.close(1008, 'room not found'); return; }
+async function authenticate(ws, roomId, playerId, token) {
+    if (!roomId || !playerId) { ws.close(4000, 'roomId/playerId required'); return null; }
 
-    const role = await getMemberRole(roomInfo.campaign_id, playerId);
-    if (!role) { ws.close(1008, 'not a room member'); return; }
+    const member = await memberInRoom(roomId, playerId);
+    if (!member) { ws.close(4001, 'not a room member'); return null; }
+    // Старые сессии (до появления токенов) пускаем и выдаём им токен
+    if (member.token && member.token !== token) { ws.close(4001, 'bad token'); return null; }
+    const issuedToken = member.token ? null : await ensureToken(member);
 
-    if (!sockets.has(roomId)) sockets.set(roomId, new Set());
-    sockets.get(roomId).add(ws);
-
-    // Шлём начальный снапшот только этому клиенту (не broadcast)
-    // Флаг initial=true — клиент-мастер использует его чтобы не затирать свой стейт пустым снапшотом
-    try {
-        const current = await getRoomState(roomId);
-        ws.send(JSON.stringify({
-            type: 'state_snapshot',
-            state: current.state || {},
-            updatedAt: current.updated_at,
-            initial: true
-        }));
-    } catch (error) {
-        console.error('Initial state error:', error);
-    }
-
-    broadcast(roomId, { type: 'players_updated' }, ws);
-
-    ws.on('message', async raw => {
-        try {
-            const message = JSON.parse(raw.toString());
-
-            /* PING — отвечаем pong, не перекидываем остальным */
-            if (message.type === 'ping') {
-                ws.send(JSON.stringify({ type: 'pong' }));
-                return;
-            }
-
-            /* GAME STATE — только мастер меняет весь battlefield */
-            if (message.type === 'state_update') {
-                if (role !== 'master') {
-                    ws.send(JSON.stringify({ type:'permission_error', message:'Только мастер может изменять состояние карты.' }));
-                    return;
-                }
-                const nextState = message.state || {};
-                await saveRoomState(roomId, nextState);
-                // excludeWs=ws — мастер не получает эхо своего же обновления
-                broadcast(roomId, {
-                    type: 'state_snapshot', state: nextState,
-                    from: playerId, updatedAt: new Date().toISOString()
-                }, ws);
-                return;
-            }
-
-            /* PLAYER STATE — мержим только персонажей этого игрока */
-            if (message.type === 'player_state_update') {
-                if (role !== 'player') return;
-                const current = await getRoomState(roomId);
-                const merged = mergePlayerPatch(current.state || {}, message.patch || {}, playerId);
-                await saveRoomState(roomId, merged);
-                // Рассылаем всем КРОМЕ самого игрока (он уже видит своё состояние локально)
-                broadcast(roomId, {
-                    type: 'state_snapshot', state: merged,
-                    from: playerId, updatedAt: new Date().toISOString()
-                }, ws);
-                return;
-            }
-
-            /* DICE */
-            if (message.type === 'dice_roll') {
-                broadcast(roomId, {
-                    type: 'dice_roll', roll: message.roll || {},
-                    from: playerId, playerName: message.playerName || 'Игрок'
-                }, ws);
-                return;
-            }
-
-            /* CANVAS */
-            if (message.type === 'canvas_update') {
-                if (role !== 'master') {
-                    ws.send(JSON.stringify({ type:'permission_error', message:'Рисование и туман доступны только мастеру.' }));
-                    return;
-                }
-                broadcast(roomId, {
-                    type: 'canvas_update', canvas: message.canvas || null,
-                    canvasType: message.canvasType || 'draw', from: playerId
-                }, ws);
-                return;
-            }
-
-            /* ROOM EVENT */
-            if (message.type === 'room_event') {
-                broadcast(roomId, { type: 'room_event', from: playerId, event: message.event }, ws);
-                return;
-            }
-
-        } catch (error) {
-            console.error('WS message error:', error);
-        }
-    });
+    if (ws.readyState !== 1) return null; // клиент успел отключиться
+    const room = await getRoom(roomId);
+    const ctx = { room, playerId: String(member.user_id), role: member.role, name: member.username };
+    ws.meta = ctx;
+    room.addClient(ws);
 
     ws.on('close', () => {
-        const clients = sockets.get(roomId);
-        if (clients) {
-            clients.delete(ws);
-            if (clients.size === 0) sockets.delete(roomId);
-        }
-        broadcast(roomId, { type: 'players_updated' });
+        room.removeClient(ws);
+        notifyPlayers(roomId);
     });
-});
 
+    room.send(ws, {
+        type: 'welcome',
+        player: { id: member.user_id, name: member.username, role: member.role },
+        token: issuedToken,
+        roomEmpty: room.isEmpty()
+    });
+    room.send(ws, { type: 'map_image', src: room.mapSrc || null });
+    for (const canvasType of ['draw', 'fog']) {
+        if (room.canvases[canvasType]) room.send(ws, { type: 'canvas_update', canvasType, canvas: room.canvases[canvasType] });
+    }
+    room.send(ws, room.snapshot({ initial: true }));
+    notifyPlayers(roomId);
+    return ctx;
+}
+
+function onMessage(ws, ctx, raw) {
+    let message;
+    try { message = JSON.parse(raw.toString()); } catch { return; }
+    if (!message || typeof message !== 'object') return;
+    const { room, playerId, role } = ctx;
+    const deny = text => room.send(ws, { type: 'permission_error', message: text });
+
+    switch (message.type) {
+        case 'ping':
+            room.send(ws, { type: 'pong', version: room.version });
+            return;
+
+        // Мастер меняет всё поле боя
+        case 'state_update':
+            if (role !== 'master') return deny('Только мастер может изменять состояние карты.');
+            room.run(() => {
+                const base = Number(message.baseVersion);
+                const stale = !Number.isFinite(base) || base !== room.version;
+                const { merged } = room.applyMasterState(message.state, Number.isFinite(base) ? base : -1);
+                const snap = room.snapshot({ from: playerId });
+                room.broadcast(snap, ws);
+                // Если мастер работал со старой версией — отдаём ему итог слияния
+                room.send(ws, stale || merged ? snap : { type: 'ack', version: room.version, seq: message.seq });
+            });
+            return;
+
+        // Игрок меняет только своих персонажей, их токены и инвентарь
+        case 'player_state_update':
+            if (role !== 'player') return;
+            room.run(() => {
+                const base = Number(message.baseVersion);
+                const stale = !Number.isFinite(base) || base !== room.version;
+                const { remapped } = room.applyPlayerPatch(message.patch || {}, playerId);
+                const snap = room.snapshot({ from: playerId });
+                room.broadcast(snap, ws);
+                room.send(ws, stale || remapped ? snap : { type: 'ack', version: room.version, seq: message.seq });
+            });
+            return;
+
+        case 'map_image':
+            if (role !== 'master') return deny('Загружать карту может только мастер.');
+            room.run(() => {
+                const src = typeof message.src === 'string' && message.src.startsWith('data:image/') ? message.src : null;
+                room.setMap(src);
+                room.broadcast({ type: 'map_image', src }, ws);
+            });
+            return;
+
+        case 'canvas_update':
+            if (role !== 'master') return deny('Рисование и туман доступны только мастеру.');
+            room.run(() => {
+                const canvasType = message.canvasType === 'fog' ? 'fog' : 'draw';
+                const canvas = typeof message.canvas === 'string' && message.canvas.startsWith('data:image/') ? message.canvas : null;
+                room.setCanvas(canvasType, canvas);
+                room.broadcast({ type: 'canvas_update', canvasType, canvas, from: playerId }, ws);
+            });
+            return;
+
+        case 'dice_roll':
+            room.run(() => {
+                const r = message.roll && typeof message.roll === 'object' ? message.roll : {};
+                const playerName = clean(message.playerName || ctx.name, 80) || 'Игрок';
+                room.addDiceRoll({
+                    time: Number(r.time) || Date.now(), sides: r.sides, modStr: r.modifierStr || r.modStr || '',
+                    total: r.total, isCrit: !!r.isCrit, isFail: !!r.isFail, playerName
+                });
+                room.broadcast({ type: 'dice_roll', roll: r, from: playerId, playerName, version: room.version }, ws);
+                room.send(ws, { type: 'ack', version: room.version });
+            });
+            return;
+
+        case 'room_event':
+            room.broadcast({ type: 'room_event', from: playerId, event: message.event }, ws);
+            return;
+    }
+}
+
+// Сервер сам проверяет, что соединения живы, и закрывает «зависшие»
+const heartbeat = setInterval(() => {
+    for (const ws of wss.clients) {
+        if (!ws.isAlive) { ws.terminate(); continue; }
+        ws.isAlive = false;
+        try { ws.ping(); } catch { /* сокет уже закрыт */ }
+    }
+}, HEARTBEAT_MS);
 
 /* =========================================================
-   GLOBAL ERROR HANDLER
+   START / STOP
 ========================================================= */
 
-app.use((error, _req, res, _next) => {
-    console.error('Unhandled server error:', error);
-    res.status(500).json({ error: error.message || 'Внутренняя ошибка сервера' });
-});
+async function start() {
+    for (let attempt = 1; ; attempt++) {
+        try { await ensureSchema(); break; }
+        catch (err) {
+            console.error(`[db] schema check failed (attempt ${attempt}):`, err.message);
+            if (attempt >= 5) throw err;
+            await new Promise(r => setTimeout(r, 3000 * attempt));
+        }
+    }
+    server.listen(PORT, () => console.log(`D&D Toolkit backend: http://localhost:${PORT}`));
+}
 
+let stopping = false;
+async function shutdown(signal) {
+    if (stopping) return;
+    stopping = true;
+    console.log(`${signal}: сохраняю комнаты и останавливаюсь…`);
+    clearInterval(heartbeat);
+    for (const ws of wss.clients) ws.close(1012, 'server restart'); // клиенты сами переподключатся
+    server.close();
+    try { await flushAll(); } catch (err) { console.error('flush on shutdown failed:', err); }
+    await pool.end().catch(() => {});
+    process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
-/* =========================================================
-   START SERVER
-========================================================= */
-
-server.listen(PORT, () => {
-    console.log(`D&D Toolkit backend: http://localhost:${PORT}`);
+start().catch(err => {
+    console.error('Не удалось запустить сервер:', err);
+    process.exit(1);
 });

@@ -75,6 +75,7 @@ function applySaveData(data) {
         const dImg = new Image();
         dImg.onload = () => {
           document.getElementById('draw-canvas').getContext('2d').drawImage(dImg, 0, 0);
+          window.dndOnlineCanvasSync?.('draw');
         };
         dImg.src = data.drawings;
       }
@@ -82,6 +83,7 @@ function applySaveData(data) {
         const fImg = new Image();
         fImg.onload = () => {
           document.getElementById('fog-canvas').getContext('2d').drawImage(fImg, 0, 0);
+          window.dndOnlineCanvasSync?.('fog');
         };
         fImg.src = data.fog;
       }
@@ -105,6 +107,7 @@ function applySaveData(data) {
   renderLootCategories();
   renderLoot();
   renderAtmosphere();
+  window.dndOnlineSync?.('load_game');
 }
 
 function renderAll() {
@@ -128,7 +131,16 @@ function saveGame() {
   }
 }
 
+function playerCannotLoad() {
+  if (window.dndOnlineGetRole?.() === 'player') {
+    toast('В онлайн-комнате загружать сохранения может только мастер', 'error');
+    return true;
+  }
+  return false;
+}
+
 function loadGame() {
+  if (playerCannotLoad()) return;
   const raw = localStorage.getItem('dm_toolkit_save_v9') || localStorage.getItem('dm_toolkit_save_v8');
   if (!raw) { toast('Нет сохранённой игры', 'error'); return; }
   try {
@@ -169,6 +181,7 @@ function exportJSON() {
 function importJSON(e) {
   const file = e.target.files[0];
   if (!file) return;
+  if (playerCannotLoad()) { e.target.value = ''; return; }
   const reader = new FileReader();
   reader.onload = (ev) => {
     try {

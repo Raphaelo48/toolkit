@@ -1,31 +1,51 @@
-// D&D Toolkit — API layer
-// Сейчас сайт работает локально. Этот модуль подготовлен для будущего Backend/WebSocket.
-// Игровые данные не отправляются на сервер автоматически.
+// D&D Toolkit — API layer (HTTP-запросы к backend)
 
 window.DND_API = {
-  baseUrl: "https://dnd-toolkit-backend.onrender.com",
-  connected: false,
+  // Адрес backend. Для локальной разработки можно переопределить:
+  // localStorage.setItem('dnd_backend_url', 'http://localhost:5000')
+  baseUrl: (() => {
+    try { const v = localStorage.getItem('dnd_backend_url'); if (v) return v.replace(/\/$/, ''); } catch (e) {}
+    return 'https://dnd-toolkit-backend.onrender.com';
+  })(),
 
   configure(baseUrl) {
-    this.baseUrl = String(baseUrl || "").replace(/\/$/, "");
+    this.baseUrl = String(baseUrl || '').replace(/\/$/, '');
+  },
+
+  wsUrl(path) {
+    return this.baseUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:') + path;
   },
 
   async request(path, options = {}) {
-    if (!this.baseUrl) {
-      throw new Error("Backend URL is not configured");
+    const { timeout = 20000, headers = {}, ...rest } = options;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    let response;
+    try {
+      response = await fetch(this.baseUrl + path, {
+        ...rest,
+        headers: { 'Content-Type': 'application/json', ...headers },
+        signal: controller.signal
+      });
+    } catch (err) {
+      throw new Error(err.name === 'AbortError'
+        ? 'Сервер не отвечает. Возможно, он просыпается — попробуйте через минуту.'
+        : 'Нет связи с сервером. Проверьте интернет.');
+    } finally {
+      clearTimeout(timer);
     }
-    const response = await fetch(this.baseUrl + path, {
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        ...(options.headers || {})
-      },
-      ...options
-    });
+    const type = response.headers.get('content-type') || '';
+    const body = type.includes('application/json') ? await response.json().catch(() => ({})) : await response.text();
     if (!response.ok) {
-      throw new Error(`API ${response.status}: ${response.statusText}`);
+      const error = new Error((body && body.error) || `Ошибка сервера (${response.status})`);
+      error.status = response.status;
+      throw error;
     }
-    const type = response.headers.get("content-type") || "";
-    return type.includes("application/json") ? response.json() : response.text();
+    return body;
+  },
+
+  /** Разбудить backend (бесплатный Render засыпает после простоя). */
+  async wake() {
+    try { await this.request('/api/health', { timeout: 70000 }); return true; } catch (e) { return false; }
   }
 };

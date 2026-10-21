@@ -32,6 +32,7 @@ function setupMapInteraction() {
       const text = prompt('Введите текст:');
       if (text) {
         drawText(mc.x, mc.y, text);
+        window.dndOnlineCanvasSync?.('draw');
         logEvent('system', `Добавлен текст: "${text}"`);
       }
       return;
@@ -136,7 +137,9 @@ function setupMapInteraction() {
       state.isDrawing = false;
       state.lastDrawPos = null;
       window.dndOnlineSync?.('drawing');
-      window.dndOnlineCanvasSync?.('draw');
+      // Кисть меняет рисунок, туман — туман, ластик стирает и то и другое
+      if (state.tool !== 'fog') window.dndOnlineCanvasSync?.('draw');
+      if (state.tool === 'fog' || state.tool === 'eraser') window.dndOnlineCanvasSync?.('fog');
     }
   });
 

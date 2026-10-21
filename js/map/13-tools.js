@@ -127,4 +127,7 @@ function clearDrawings() {
   state.shapes = [];
   logEvent('system', 'Рисунки и фигуры очищены');
   toast('Рисунки очищены');
+  window.dndOnlineSync?.('clear_drawings');
+  window.dndOnlineCanvasSync?.('draw');
+  window.dndOnlineCanvasSync?.('fog');
 }

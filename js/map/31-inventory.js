@@ -205,6 +205,7 @@ function addLootItemToCharInventory(itemId, removeTokenId) {
       const idx = state.tokens.findIndex(t => t.id === removeTokenId);
       if (idx >= 0) {
         state.tokens.splice(idx, 1);
+        window.DND_ONLINE?.notifyLootPicked?.(removeTokenId);
         if (state.selectedTokenId === removeTokenId) state.selectedTokenId = null;
         renderTokens?.();
         renderInfoPanel?.();
@@ -234,20 +235,4 @@ function closeRecipientPicker() {
   window._recipientPickCallback = null;
 }
 
-// ───────── патч apply для inventory ─────────
-(function patchApply() {
-  const interval = setInterval(() => {
-    if (!window.DND_ONLINE) return;
-    clearInterval(interval);
-    const online = window.DND_ONLINE;
-    const orig = online.handleMessage.bind(online);
-    online.handleMessage = function(m) {
-      if (m.type === 'state_snapshot' && m.state && typeof m.state.inventory === 'object') {
-        state.inventory = m.state.inventory;
-        renderInventoryIfOpen(document.getElementById('inventory-modal')?.dataset?.tokenId);
-        renderInfoPanel?.();
-      }
-      orig(m);
-    };
-  }, 100);
-})();
+// Инвентарь приходит вместе с состоянием комнаты (js/online/realtime.js → applySharedState).

@@ -541,3 +541,13 @@
 
 .online-role{margin-top:4px;font-size:11px;color:var(--accent);font-weight:600;}
 button:disabled{opacity:.4;cursor:not-allowed;pointer-events:none;}
+/* online: статус игроков, исключение, подсказки */
+.online-player{display:flex;align-items:center;gap:8px}
+.online-dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.2);flex:0 0 auto}
+.online-dot.on{background:#5fd07a;box-shadow:0 0 6px rgba(95,208,122,.7)}
+.online-me{opacity:.55;font-size:12px}
+.online-kick{margin-left:auto;background:none;border:1px solid rgba(255,255,255,.15);color:inherit;border-radius:6px;cursor:pointer;padding:2px 8px;opacity:.7}
+.online-kick:hover{opacity:1;border-color:#ff8e8e;color:#ff8e8e}
+.online-hint{font-size:12px;opacity:.6}
+.online-resume{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}
+.online-form button:disabled,.online-form input:disabled,.online-form textarea:disabled{opacity:.6;cursor:wait}
