@@ -111,6 +111,40 @@ function visionCompute(tokens) {
   return VisionCore.computeVisible(VisionCore.blockingMask(mask, w, h, v.doors), w, h, cell, sources);
 }
 
+/* ───────── стены непроходимы ───────── */
+
+const VIS_BLOCK = { key: '', mask: null };
+VIS.rev = 0; // меняется при правке стен — сбрасывает кэш
+
+function visionBlocking() {
+  const doors = visionSettings().doors;
+  const key = VIS.rev + '|' + JSON.stringify(doors);
+  if (VIS_BLOCK.key !== key || !VIS_BLOCK.mask) {
+    VIS_BLOCK.mask = VisionCore.blockingMask(VIS.walls.mask, VIS.walls.w, VIS.walls.h, doors);
+    VIS_BLOCK.key = key;
+  }
+  return VIS_BLOCK.mask;
+}
+
+const visionCollisionOn = () => !!VIS.walls && visionSettings().collide !== false;
+
+/**
+ * Куда фишка игрока может переместиться. Упёрлась в стену — скользит вдоль неё
+ * (пробуем сдвиг только по X или только по Y). Мастер ходит свободно.
+ */
+window.dndLimitMove = function (token, x, y) {
+  if (!visionIsPlayer() || !visionCollisionOn()) return { x, y, blocked: false };
+  const { w, h, cell } = VIS.walls;
+  const b = visionBlocking();
+  const direct = VisionCore.limitMove(b, w, h, cell, token.x, token.y, x, y);
+  if (!direct.blocked) return direct;
+  const alongX = VisionCore.limitMove(b, w, h, cell, token.x, token.y, x, token.y);
+  const alongY = VisionCore.limitMove(b, w, h, cell, token.x, token.y, token.x, y);
+  const gain = p => Math.abs(p.x - token.x) + Math.abs(p.y - token.y);
+  const best = [direct, alongX, alongY].sort((a, c) => gain(c) - gain(a))[0];
+  return { ...best, blocked: true };
+};
+
 /** Игрок тащит свою фишку: мгновенный предпросмотр обзора. */
 window.dndVisionOnDrag = function (token) {
   if (!visionActive() || !visionIsPlayer() || token?.kind !== 'character') return;
@@ -125,6 +159,7 @@ window.dndVisionSetWalls = function (msg) {
   if (!msg || msg.none) { VIS.walls = null; VIS.server = null; }
   else VIS.walls = { w: msg.w, h: msg.h, cell: msg.cell, mask: VisionCore.unpackBits(msg.data, msg.w * msg.h) };
   VIS.localExplored = null;
+  VIS.rev++;
   visionRender(); renderVisionPanel();
 };
 
@@ -188,6 +223,7 @@ function visionDetectAt(x, y) {
   const res = VisionCore.detectWalls(pixels, W, H, cell, ref, 42, Math.round((gridCells * 0.7) ** 2));
   VIS.walls = { w: res.w, h: res.h, cell, mask: res.walls };
   VIS.localExplored = null;
+  VIS.rev++;
   const v = visionSettings();
   v.enabled = true;
   v.doors = [];
@@ -204,6 +240,7 @@ function visionPaintAt(x, y) {
   if (!VIS.walls) return;
   const value = state.tool === 'vwall' ? 1 : 0;
   VisionCore.paint(VIS.walls.mask, VIS.walls.w, VIS.walls.h, VIS.walls.cell, x, y, (state.drawSettings.size || 12) / 2, value);
+  VIS.rev++;
   visionRender();
 }
 
@@ -314,6 +351,7 @@ function renderVisionPanel() {
     <div class="vision-settings">
       <label class="vision-check"><input type="checkbox" ${v.enabled ? 'checked' : ''} onchange="visionSet('enabled', this.checked)"> Обзор игроков включён</label>
       <label class="vision-check"><input type="checkbox" ${v.shared ? 'checked' : ''} onchange="visionSet('shared', this.checked)"> Общий обзор группы</label>
+      <label class="vision-check"><input type="checkbox" ${v.collide !== false ? 'checked' : ''} onchange="visionSet('collide', this.checked)"> Стены и закрытые двери непроходимы</label>
       <label class="vision-row">Радиус обзора
         <input type="number" class="input" min="1" max="60" value="${v.radius}" onchange="visionSet('radius', Math.max(1, Math.min(60, Number(this.value) || 12)))"> кл.</label>
       <label class="vision-row">Мне показывать
@@ -373,6 +411,7 @@ function visionSaveData() {
 function visionLoadData(data) {
   VIS.walls = data && data.w ? { w: data.w, h: data.h, cell: data.cell, mask: VisionCore.unpackBits(data.data, data.w * data.h) } : null;
   VIS.localExplored = null;
+  VIS.rev++;
   visionSendWalls();
   visionRender(); renderVisionPanel();
 }

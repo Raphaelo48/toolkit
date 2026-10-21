@@ -191,7 +191,37 @@
     }
   }
 
-  const api = { packBits, unpackBits, rleEncode, rleDecode, blockingMask, computeVisible, isPointVisible, detectWalls, paint, cellIndex };
+  /* ---------- движение сквозь стены ---------- */
+
+  /**
+   * Докуда фишка может пройти по прямой из (x1,y1) в (x2,y2), не задев стену или закрытую дверь.
+   * Если фишка стоит в стене (поставили неудачно), выйти из неё можно — запрещено только входить в стену.
+   * Возвращает { x, y, blocked }.
+   */
+  function limitMove(blocking, w, h, cell, x1, y1, x2, y2) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 0.01) return { x: x2, y: y2, blocked: false };
+    const stepLen = Math.max(1, cell / 3);
+    const steps = Math.ceil(dist / stepLen);
+    const at = (x, y) => {
+      const ix = Math.floor(x / cell), iy = Math.floor(y / cell);
+      return ix < 0 || iy < 0 || ix >= w || iy >= h ? 1 : blocking[iy * w + ix];
+    };
+    let inStartWall = !!at(x1, y1);
+    let lastX = x1, lastY = y1;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const x = x1 + dx * t, y = y1 + dy * t;
+      if (at(x, y)) {
+        if (!inStartWall) return { x: lastX, y: lastY, blocked: true };
+      } else inStartWall = false;
+      lastX = x; lastY = y;
+    }
+    return { x: x2, y: y2, blocked: false };
+  }
+
+  const api = { packBits, unpackBits, rleEncode, rleDecode, blockingMask, computeVisible, isPointVisible, detectWalls, paint, cellIndex, limitMove };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.VisionCore = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

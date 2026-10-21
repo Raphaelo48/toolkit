@@ -141,7 +141,7 @@ class Room {
     }
 
     applyPlayerPatch(patch, playerId) {
-        const { state, remapped } = mergePlayerPatch(this.state, patch, playerId);
+        const { state, remapped } = mergePlayerPatch(this.state, patch, playerId, this.moveLimiter());
         this.state = state;
         this.version++;
         this.playerPatchVersion.set(String(playerId), this.version);
@@ -233,6 +233,15 @@ class Room {
         this.walls = { w, h, cell, data: payload.data, mask };
         this.markDirty();
         return true;
+    }
+
+    /** Проверка хода фишки игрока: сквозь стены и закрытые двери нельзя. null — ограничений нет. */
+    moveLimiter() {
+        const v = this.state.vision && typeof this.state.vision === 'object' ? this.state.vision : {};
+        if (!this.walls || v.collide === false) return null;
+        const { w, h, cell, mask } = this.walls;
+        const blocking = Vision.blockingMask(mask, w, h, Array.isArray(v.doors) ? v.doors : []);
+        return (from, to) => Vision.limitMove(blocking, w, h, cell, Number(from.x) || 0, Number(from.y) || 0, Number(to.x) || 0, Number(to.y) || 0);
     }
 
     visionSettings() {
@@ -657,7 +666,7 @@ function keepPlayerEntities(next, current, playerId) {
 
 }
 
-export function mergePlayerPatch(currentState, patch, playerId) {
+export function mergePlayerPatch(currentState, patch, playerId, limitMove = null) {
     const current = clone(currentState || {});
     const incomingChars = Array.isArray(patch?.characters) ? patch.characters.slice(0, MAX_PLAYER_CHARACTERS) : [];
     const incomingTokens = Array.isArray(patch?.characterTokens) ? patch.characterTokens : [];
@@ -712,6 +721,12 @@ export function mergePlayerPatch(currentState, patch, playerId) {
             const owner = normalizedChars.find(ch => String(ch.id) === String(sourceId));
             if (owner && owner.hpCur != null) t.hpCur = owner.hpCur; // фишка показывает HP персонажа
             for (const f of SERVER_OWNED_TOKEN_FIELDS) delete t[f];
+            // Ход сквозь стену или закрытую дверь — фишка останавливается у препятствия
+            const prev = limitMove && ownTokenIds.has(String(raw.id)) ? currentTokens.find(x => String(x.id) === String(raw.id)) : null;
+            if (prev && (prev.x !== t.x || prev.y !== t.y)) {
+                const res = limitMove(prev, t);
+                if (res.blocked) { t.x = res.x; t.y = res.y; remapped = true; }
+            }
             if (!ownTokenIds.has(String(raw.id))) t.id = allocId();
             return t;
         })

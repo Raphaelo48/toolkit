@@ -110,8 +110,12 @@ function setupMapInteraction() {
       const id = parseInt(state.draggingToken.dataset.id);
       const token = state.tokens.find(t => t.id === id);
       if (token) {
-        token.x = mc.x - state.dragOffset.x;
-        token.y = mc.y - state.dragOffset.y;
+        // Сквозь стены и закрытые двери игроку нельзя — фишка упирается и скользит вдоль стены
+        const to = window.dndLimitMove?.(token, mc.x - state.dragOffset.x, mc.y - state.dragOffset.y)
+          || { x: mc.x - state.dragOffset.x, y: mc.y - state.dragOffset.y, blocked: false };
+        token.x = to.x;
+        token.y = to.y;
+        state.draggingToken.classList.toggle('bumped', !!to.blocked);
         state.draggingToken.style.left = (token.x - token.size / 2) + 'px';
         state.draggingToken.style.top = (token.y - token.size / 2) + 'px';
         window.dndVisionOnDrag?.(token);
@@ -144,7 +148,7 @@ function setupMapInteraction() {
     }
     if (state.isPanning) state.isPanning = false;
     if (state.draggingToken) {
-      state.draggingToken.classList.remove('dragging');
+      state.draggingToken.classList.remove('dragging', 'bumped');
       state.draggingToken = null;
       window.dndOnlineSync?.('token_move');
     }
