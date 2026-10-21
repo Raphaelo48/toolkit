@@ -3,7 +3,7 @@
 // изменения одной комнаты обрабатываются строго по очереди, а в базу состояние
 // пишется пакетно (не чаще раза в SAVE_DELAY_MS) и обязательно при остановке.
 
-import { query } from './db.js';
+import { store } from './store/index.js';
 
 const SAVE_DELAY_MS = 1000;
 const UNLOAD_AFTER_MS = 10 * 60 * 1000;
@@ -49,14 +49,10 @@ class Room {
         if (!this.dirty) return;
         this.dirty = false;
         try {
-            await query(
-                `INSERT INTO room_state (room_id, state, version, map_src, draw_canvas, fog_canvas, updated_at)
-                 VALUES ($1, $2::jsonb, $3, $4, $5, $6, NOW())
-                 ON CONFLICT (room_id) DO UPDATE SET
-                   state = EXCLUDED.state, version = EXCLUDED.version, map_src = EXCLUDED.map_src,
-                   draw_canvas = EXCLUDED.draw_canvas, fog_canvas = EXCLUDED.fog_canvas, updated_at = NOW()`,
-                [this.id, JSON.stringify(this.state), this.version, this.mapSrc, this.canvases.draw, this.canvases.fog]
-            );
+            await store.saveRoomState(this.id, {
+                state: this.state, version: this.version, map_src: this.mapSrc,
+                draw_canvas: this.canvases.draw, fog_canvas: this.canvases.fog
+            });
         } catch (err) {
             this.dirty = true; // попробуем ещё раз
             console.error(`[room ${this.id}] save failed:`, err.message);
@@ -171,11 +167,8 @@ export async function getRoom(roomId) {
 
     const promise = (async () => {
         const room = new Room(id);
-        const r = await query(
-            'SELECT state, version, map_src, draw_canvas, fog_canvas FROM room_state WHERE room_id = $1', [id]
-        );
-        if (r.rowCount) {
-            const row = r.rows[0];
+        const row = await store.loadRoomState(id);
+        if (row) {
             room.state = row.state || {};
             room.version = Number(row.version) || 0;
             room.mapSrc = row.map_src || null;

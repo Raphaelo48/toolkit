@@ -1,11 +1,15 @@
 // D&D Toolkit — API layer (HTTP-запросы к backend)
 
 window.DND_API = {
-  // Адрес backend. Для локальной разработки можно переопределить:
-  // localStorage.setItem('dnd_backend_url', 'http://localhost:5000')
+  // Адрес backend:
+  // - обычно сайт открыт с самого сервера (http://localhost:5000, адрес Radmin VPN, туннель) — тогда это тот же адрес;
+  // - старый фронтенд на Render ходит в backend на Render;
+  // - можно переопределить: localStorage.setItem('dnd_backend_url', 'http://192.168.1.10:5000')
   baseUrl: (() => {
     try { const v = localStorage.getItem('dnd_backend_url'); if (v) return v.replace(/\/$/, ''); } catch (e) {}
-    return 'https://dnd-toolkit-backend.onrender.com';
+    if (location.hostname === 'dnd-toolkit-frontend.onrender.com') return 'https://dnd-toolkit-backend.onrender.com';
+    if (location.protocol === 'file:') return 'http://localhost:5000';
+    return location.origin;
   })(),
 
   configure(baseUrl) {

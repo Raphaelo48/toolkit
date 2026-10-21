@@ -4,11 +4,16 @@ import dotenv from 'dotenv';
 import { WebSocketServer } from 'ws';
 import http from 'http';
 import crypto from 'crypto';
+import os from 'os';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
 
-const { pool, query, ensureSchema } = await import('./db.js');
+// Импорт после dotenv: хранилище читает DATABASE_URL при загрузке
+const { store } = await import('./store/index.js');
 const { getRoom, getLoadedRoom, flushAll } = await import('./rooms.js');
+const FRONTEND_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const PORT = Number(process.env.PORT || 5000);
 const HEARTBEAT_MS = 25_000;
@@ -52,45 +57,19 @@ function sessionPayload(row) {
     };
 }
 
-const MEMBER_SELECT = `
-    SELECT cm.user_id, cm.role, cm.token, u.username,
-           r.id AS room_id, r.room_code, c.id AS campaign_id,
-           c.name AS campaign_name, c.description AS campaign_description
-      FROM campaign_members cm
-      JOIN users u ON u.id = cm.user_id
-      JOIN campaigns c ON c.id = cm.campaign_id
-      JOIN rooms r ON r.campaign_id = c.id`;
-
-async function memberByToken(token) {
-    if (!token) return null;
-    const r = await query(`${MEMBER_SELECT} WHERE cm.token = $1 LIMIT 1`, [token]);
-    return r.rows[0] || null;
-}
-
-async function memberInRoom(roomId, userId) {
-    const r = await query(`${MEMBER_SELECT} WHERE r.id = $1 AND cm.user_id = $2 LIMIT 1`, [roomId, userId]);
-    return r.rows[0] || null;
-}
+async function memberByToken(token) { return store.memberByToken(token); }
+async function memberInRoom(roomId, userId) { return store.memberInRoom(roomId, userId); }
 
 async function ensureToken(member) {
     if (member.token) return member.token;
-    const token = newToken();
-    await query('UPDATE campaign_members SET token = $1 WHERE campaign_id = $2 AND user_id = $3',
-        [token, member.campaign_id, member.user_id]);
-    member.token = token;
-    return token;
+    member.token = newToken();
+    await store.setToken(member.campaign_id, member.user_id, member.token);
+    return member.token;
 }
 
 async function playersOf(roomId) {
-    const r = await query(
-        `SELECT u.id, u.username AS name, cm.role, cm.joined_at
-           FROM campaign_members cm JOIN users u ON u.id = cm.user_id
-          WHERE cm.campaign_id = (SELECT campaign_id FROM rooms WHERE id = $1)
-          ORDER BY (cm.role = 'master') DESC, cm.joined_at`,
-        [roomId]
-    );
     const online = getLoadedRoom(roomId)?.onlinePlayerIds() || new Set();
-    return r.rows.map(p => ({ ...p, online: online.has(String(p.id)) }));
+    return (await store.listMembers(roomId)).map(p => ({ ...p, online: online.has(String(p.id)) }));
 }
 
 async function notifyPlayers(roomId) {
@@ -107,12 +86,10 @@ async function notifyPlayers(roomId) {
    HTTP API
 ========================================================= */
 
-app.get('/', (_req, res) => res.json({ ok: true, service: 'dnd-toolkit-backend' }));
-
 app.get('/api/health', async (_req, res) => {
     try {
-        await query('SELECT 1');
-        res.json({ success: true, database: 'connected' });
+        await store.health();
+        res.json({ success: true, database: 'connected', storage: store.kind });
     } catch (error) {
         res.status(503).json({ success: false, database: 'disconnected', error: error.message });
     }
@@ -125,48 +102,13 @@ app.post('/api/campaigns', route(async (req, res) => {
     const masterName = clean(req.body?.masterName, 80);
     if (!name || !masterName) throw httpError(400, 'Название кампании и имя мастера обязательны');
 
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        const user = (await client.query('INSERT INTO users (username) VALUES ($1) RETURNING *', [masterName])).rows[0];
-        const campaign = (await client.query(
-            'INSERT INTO campaigns (name, description, master_user_id) VALUES ($1, $2, $3) RETURNING *',
-            [name, description, user.id]
-        )).rows[0];
-        const token = newToken();
-        await client.query(
-            'INSERT INTO campaign_members (campaign_id, user_id, role, token) VALUES ($1, $2, $3, $4)',
-            [campaign.id, user.id, 'master', token]
-        );
-
-        let room = null;
-        for (let i = 0; i < 10 && !room; i++) {
-            await client.query('SAVEPOINT code_try');
-            try {
-                room = (await client.query(
-                    'INSERT INTO rooms (campaign_id, room_code) VALUES ($1, $2) RETURNING *', [campaign.id, newRoomCode()]
-                )).rows[0];
-            } catch (error) {
-                if (error.code !== '23505') throw error;
-                await client.query('ROLLBACK TO SAVEPOINT code_try');
-            }
-        }
-        if (!room) throw new Error('Не удалось создать уникальный код комнаты');
-
-        await client.query('INSERT INTO room_state (room_id) VALUES ($1) ON CONFLICT DO NOTHING', [room.id]);
-        await client.query('COMMIT');
-
-        res.status(201).json({
-            campaign: { id: campaign.id, name: campaign.name, description: campaign.description },
-            room: { id: room.id, code: room.room_code, campaign_id: campaign.id },
-            player: { id: user.id, name: user.username, role: 'master', token }
-        });
-    } catch (error) {
-        await client.query('ROLLBACK').catch(() => {});
-        throw error;
-    } finally {
-        client.release();
-    }
+    const token = newToken();
+    const { campaign, room, user } = await store.createCampaign({ name, description, masterName, token, makeCode: newRoomCode });
+    res.status(201).json({
+        campaign: { id: campaign.id, name: campaign.name, description: campaign.description },
+        room: { id: room.id, code: room.room_code, campaign_id: campaign.id },
+        player: { id: user.id, name: user.username, role: 'master', token }
+    });
 }));
 
 // Войти в комнату по коду. Повторный вход с тем же именем возвращает того же игрока.
@@ -176,10 +118,7 @@ app.post('/api/rooms/join', route(async (req, res) => {
     const token = clean(req.body?.token, 100);
     if (!roomCode || !name) throw httpError(400, 'Код комнаты и имя обязательны');
 
-    const roomRow = (await query(
-        `SELECT r.id, r.room_code, r.campaign_id, c.name AS campaign_name, c.description AS campaign_description
-           FROM rooms r JOIN campaigns c ON c.id = r.campaign_id WHERE r.room_code = $1`, [roomCode]
-    )).rows[0];
+    const roomRow = await store.findRoomByCode(roomCode);
     if (!roomRow) throw httpError(404, 'Комната не найдена. Проверьте код.');
 
     // 1. Уже есть сохранённая сессия этого браузера в этой комнате
@@ -189,10 +128,7 @@ app.post('/api/rooms/join', route(async (req, res) => {
     }
 
     // 2. Участник с таким именем уже есть
-    const existing = (await query(
-        `${MEMBER_SELECT} WHERE r.id = $1 AND lower(u.username) = lower($2) ORDER BY cm.joined_at LIMIT 1`,
-        [roomRow.id, name]
-    )).rows[0];
+    const existing = await store.memberByName(roomRow.id, name);
     if (existing) {
         if (existing.role === 'master') {
             throw httpError(409, 'Это имя мастера. Мастер входит по своей ссылке (кнопка «Ссылка для входа» в панели комнаты).');
@@ -206,12 +142,8 @@ app.post('/api/rooms/join', route(async (req, res) => {
     }
 
     // 3. Новый игрок
-    const user = (await query('INSERT INTO users (username) VALUES ($1) RETURNING *', [name])).rows[0];
     const newMemberToken = newToken();
-    await query(
-        'INSERT INTO campaign_members (campaign_id, user_id, role, token) VALUES ($1, $2, $3, $4)',
-        [roomRow.campaign_id, user.id, 'player', newMemberToken]
-    );
+    const user = await store.addPlayer(roomRow.campaign_id, name, newMemberToken);
     await notifyPlayers(roomRow.id);
     res.json(sessionPayload({
         ...roomRow, room_id: roomRow.id, user_id: user.id, username: user.username, role: 'player', token: newMemberToken
@@ -240,7 +172,7 @@ app.delete('/api/rooms/:roomId/players/:playerId', route(async (req, res) => {
     if (!target) return res.json({ success: true });
     if (target.role === 'master') throw httpError(400, 'Мастер не может покинуть свою кампанию');
 
-    await query('DELETE FROM campaign_members WHERE campaign_id = $1 AND user_id = $2', [target.campaign_id, playerId]);
+    await store.deleteMember(target.campaign_id, playerId);
     const room = getLoadedRoom(roomId);
     for (const ws of room?.clients || []) {
         if (String(ws.meta?.playerId) === String(playerId)) ws.close(4003, 'removed');
@@ -254,6 +186,17 @@ app.get('/api/rooms/:roomId/state', route(async (req, res) => {
     res.json({ state: room.state, version: room.version });
 }));
 
+app.get('/api/api.js', (_req, res) => res.sendFile(path.join(FRONTEND_DIR, 'api', 'api.js')));
+app.use('/api', (_req, res) => res.status(404).json({ error: 'Не найдено' }));
+
+// Сам сайт: сервер отдаёт фронтенд, поэтому игра открывается по одному адресу.
+// Отдаются только файлы сайта — папки backend/ и data/ наружу не видны.
+const staticOpts = { maxAge: 0, etag: true };
+app.get('/', (_req, res) => res.sendFile(path.join(FRONTEND_DIR, 'index.html')));
+app.get('/index.html', (_req, res) => res.sendFile(path.join(FRONTEND_DIR, 'index.html')));
+for (const dir of ['css', 'js', 'api', 'assets', 'img', 'images', 'fonts']) {
+    app.use(`/${dir}`, express.static(path.join(FRONTEND_DIR, dir), staticOpts));
+}
 app.use((_req, res) => res.status(404).json({ error: 'Не найдено' }));
 
 app.use((error, _req, res, _next) => {
@@ -420,14 +363,28 @@ const heartbeat = setInterval(() => {
 
 async function start() {
     for (let attempt = 1; ; attempt++) {
-        try { await ensureSchema(); break; }
+        try { await store.init(); break; }
         catch (err) {
             console.error(`[db] schema check failed (attempt ${attempt}):`, err.message);
             if (attempt >= 5) throw err;
             await new Promise(r => setTimeout(r, 3000 * attempt));
         }
     }
-    server.listen(PORT, () => console.log(`D&D Toolkit backend: http://localhost:${PORT}`));
+    server.listen(PORT, () => printAddresses());
+}
+
+function printAddresses() {
+    const lines = [`  На этом компьютере:         http://localhost:${PORT}`];
+    for (const [name, list] of Object.entries(os.networkInterfaces())) {
+        for (const a of list || []) {
+            if (a.family !== 'IPv4' || a.internal) continue;
+            const label = a.address.startsWith('26.') ? 'Radmin VPN (для друзей)'
+                : /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(a.address) ? 'Tailscale (для друзей)'
+                : 'Локальная сеть (Wi-Fi/LAN)';
+            lines.push(`  ${label.padEnd(27)} http://${a.address}:${PORT}   [${name}]`);
+        }
+    }
+    console.log(`\nD&D Toolkit запущен. Хранилище: ${store.kind === 'files' ? 'файлы в папке data' : 'PostgreSQL'}\n${lines.join('\n')}\n`);
 }
 
 let stopping = false;
@@ -439,7 +396,7 @@ async function shutdown(signal) {
     for (const ws of wss.clients) ws.close(1012, 'server restart'); // клиенты сами переподключатся
     server.close();
     try { await flushAll(); } catch (err) { console.error('flush on shutdown failed:', err); }
-    await pool.end().catch(() => {});
+    await store.close();
     process.exit(0);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));

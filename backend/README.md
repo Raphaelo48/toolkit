@@ -3,16 +3,13 @@
 Node.js + Express + WebSocket (`ws`) + PostgreSQL.
 
 ## Локальный запуск
-1. Установить Node.js 20+ и PostgreSQL, создать базу `dnd_toolkit`.
-2. Скопировать `.env.example` в `.env` и указать `DATABASE_URL`.
-3. `npm install`
-4. `npm run dev`
+1. Node.js 20+.
+2. `npm install`, затем `npm run dev` (или `start-game.bat` в корне проекта на Windows).
+3. Открыть `http://localhost:5000` — сервер сам отдаёт сайт.
 
-Таблицы создаются и обновляются автоматически при запуске (`schema.sql`), существующие данные не трогаются.
-Проверка: `GET /api/health`.
-
-Чтобы фронтенд ходил в локальный сервер, в консоли браузера:
-`localStorage.setItem('dnd_backend_url', 'http://localhost:5000')` (убрать: `localStorage.removeItem('dnd_backend_url')`).
+Без `DATABASE_URL` данные хранятся в файлах в папке `data/` в корне проекта (путь меняется переменной `DATA_DIR`).
+С `DATABASE_URL` используется PostgreSQL: таблицы создаются и обновляются автоматически (`schema.sql`).
+Проверка: `GET /api/health` (поле `storage` показывает, какое хранилище работает).
 
 ## Render
 - Root Directory: `backend`, Build: `npm install`, Start: `npm start`.
