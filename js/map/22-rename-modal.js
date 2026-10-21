@@ -34,4 +34,5 @@ function confirmRename() {
   renderTokens(); renderInfoPanel(); renderCharactersList(); renderMonstersList(); renderInitiative();
   logEvent('token', `Токен переименован: «${oldName}» → «${newName}»`);
   toast('Имя изменено');
+  window.dndOnlineSync?.('token_rename');
 }

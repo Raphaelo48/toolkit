@@ -20,7 +20,10 @@ const Inv = (() => {
 const SAVE_DELAY_MS = 1000;
 const UNLOAD_AFTER_MS = 10 * 60 * 1000;
 const DICE_HISTORY_LIMIT = 20;
-const MAX_PLAYER_CHARACTERS = 3;
+const MAX_PLAYER_CHARACTERS = 3;    // сколько персонажей игрок может создать
+const MAX_PLAYER_TOKENS_ON_MAP = 1; // сколько из них может стоять на поле одновременно
+// Эти фишки игроки вообще не получают: тайное для мастера
+const GM_ONLY_TOKEN_KINDS = new Set(['hidden', 'trap']);
 // Эти поля персонажа меняет только мастер
 const MASTER_ONLY_CHARACTER_FIELDS = ['xp', 'level', 'hpMax'];
 // Эти поля меняются только действиями инвентаря на сервере — никакой снимок их не перезапишет
@@ -210,6 +213,67 @@ class Room {
     snapshot(extra = {}) {
         return { type: 'state_snapshot', state: this.state, version: this.version, ...extra };
     }
+
+    /** Снимок для конкретного участника: игрок не получает тайного (заметки мастера, хиты врагов, ловушки…). */
+    snapshotFor(ws, extra = {}) {
+        const meta = ws.meta || {};
+        const state = meta.role === 'master' ? this.state : stateForPlayer(this.state, meta.playerId);
+        return { type: 'state_snapshot', state, version: this.version, ...extra };
+    }
+
+    sendSnapshot(ws, extra = {}) {
+        this.send(ws, this.snapshotFor(ws, extra));
+    }
+
+    /** Разослать снимок всем (каждому — свою версию). */
+    broadcastSnapshot(extra = {}, exclude = null) {
+        const cache = new Map();
+        for (const ws of this.clients) {
+            if (ws === exclude) continue;
+            const key = ws.meta?.role === 'master' ? 'master' : `p:${ws.meta?.playerId}`;
+            if (!cache.has(key)) cache.set(key, JSON.stringify(this.snapshotFor(ws, extra)));
+            this.send(ws, cache.get(key));
+        }
+    }
+
+    /** Игрок бросает инициативу за своего персонажа — один раз. Мастер может за кого угодно. */
+    rollInitiative(tokenId, mod, actor) {
+        const tokens = Array.isArray(this.state.tokens) ? this.state.tokens : [];
+        const token = tokens.find(t => String(t.id) === String(tokenId));
+        if (!token) return { ok: false, error: 'Фишка не найдена' };
+        if (actor.role !== 'master') {
+            const ch = (this.state.characters || []).find(c => String(c.id) === String(token.sourceId));
+            if (token.kind !== 'character' || !ch || !isOwnChar(ch, actor.playerId)) {
+                return { ok: false, error: 'Бросать инициативу можно только за своего персонажа' };
+            }
+        }
+        const list = Array.isArray(this.state.initiative) ? this.state.initiative : (this.state.initiative = []);
+        if (list.some(i => String(i.tokenId) === String(token.id))) {
+            return { ok: false, error: 'Инициатива уже брошена. Изменить её может только мастер.' };
+        }
+        const modifier = Math.max(-5, Math.min(10, Math.trunc(Number(mod)) || 0));
+        const die = 1 + Math.floor(Math.random() * 20);
+        const id = Math.max(Number(this.state.nextId) || 1, maxId(this.state) + 1, ...list.map(i => Number(i.id) + 1 || 0));
+        this.state.nextId = id + 1;
+        const entry = {
+            id, name: token.name, value: die + modifier, roll: die, mod: modifier,
+            tokenId: token.id, sourceId: token.sourceId, sourceKind: token.kind,
+            image: token.image || null, emoji: token.emoji, color: token.color
+        };
+        const initIndex = insertInitiative(this.state, entry);
+        const sign = modifier ? (modifier > 0 ? `+${modifier}` : `${modifier}`) : '';
+        const logEntry = {
+            id: Date.now() + Math.random(), type: 'combat', data: null, timestamp: Date.now(),
+            message: `⚡ Инициатива «${token.name}»: ${entry.value} (d20 ${die}${sign})`
+        };
+        this.state.eventLog = Array.isArray(this.state.eventLog) ? this.state.eventLog : [];
+        this.state.eventLog.unshift(logEntry);
+        if (this.state.eventLog.length > 500) this.state.eventLog.length = 500;
+        this.version++;
+        this.actionHistory.push({ version: this.version, addedTokens: [], removedTokenIds: [], logEntry, initAdded: clone(entry) });
+        this.markDirty();
+        return { ok: true, entry, initIndex };
+    }
 }
 
 /* ---------- загрузка ---------- */
@@ -326,6 +390,62 @@ function moveToParty(state, holder) {
     return moved;
 }
 
+/** Вставить участника в список инициативы по убыванию, не сбивая текущий ход. */
+function insertInitiative(state, entry) {
+    const list = Array.isArray(state.initiative) ? state.initiative : (state.initiative = []);
+    const sorted = list.every((x, i) => i === 0 || Number(list[i - 1].value) >= Number(x.value));
+    let pos = list.length;
+    if (sorted) {
+        pos = list.findIndex(x => Number(x.value) < Number(entry.value));
+        if (pos < 0) pos = list.length;
+    }
+    list.splice(pos, 0, entry);
+    const idx = Number(state.initIndex) || 0;
+    if (list.length > 1 && pos <= idx) state.initIndex = idx + 1;
+    return state.initIndex;
+}
+
+/**
+ * Версия состояния для игрока. Убираем то, что игроку знать не положено:
+ * ловушки и скрытые зоны, заметки мастера, хиты/КД и вещи чужих существ,
+ * бестиарий мастера, вещи других персонажей, тайные записи журнала.
+ */
+export function stateForPlayer(state, playerId) {
+    const s = { ...state };
+    const chars = Array.isArray(state.characters) ? state.characters : [];
+    const ownCharIds = new Set(chars.filter(c => isOwnChar(c, playerId)).map(c => String(c.id)));
+    const anyCharIds = new Set(chars.map(c => String(c.id)));
+
+    s.tokens = (Array.isArray(state.tokens) ? state.tokens : [])
+        .filter(t => t && !GM_ONLY_TOKEN_KINDS.has(t.kind))
+        .map(t => {
+            if (t.kind === 'character' && ownCharIds.has(String(t.sourceId))) return t;
+            const c = { ...t };
+            delete c.notes; delete c.inventory; delete c.coins;
+            // Хиты союзников (персонажей других игроков) видны, хиты врагов и NPC — нет
+            if (!(t.kind === 'character' && anyCharIds.has(String(t.sourceId)))) {
+                delete c.hpCur; delete c.hpMax; delete c.ac; delete c.dex;
+            }
+            return c;
+        });
+    s.characters = chars.map(c => {
+        if (isOwnChar(c, playerId)) return c;
+        const copy = { ...c };
+        delete copy.inventory; delete copy.coins; delete copy.notes;
+        return copy;
+    });
+    s.monsters = [];
+    s.initiative = (Array.isArray(state.initiative) ? state.initiative : []).map(i => {
+        const isChar = i.sourceKind === 'character' && anyCharIds.has(String(i.sourceId));
+        if (isChar) return i;
+        const copy = { ...i };
+        delete copy.hpCur; delete copy.hpMax;
+        return copy;
+    });
+    s.eventLog = (Array.isArray(state.eventLog) ? state.eventLog : []).filter(e => !(e && e.data && e.data.gm));
+    return s;
+}
+
 /** Повторить результат действий (появившиеся/исчезнувшие фишки, записи журнала) поверх старого снимка. */
 function replayActions(next, actions) {
     if (!actions.length) return false;
@@ -340,6 +460,13 @@ function replayActions(next, actions) {
             next.tokens = next.tokens.filter(t => !removed.has(String(t.id)));
         }
         if (a.logEntry && !next.eventLog.some(e => e && e.id === a.logEntry.id)) next.eventLog.push(clone(a.logEntry));
+        if (a.initAdded) {
+            next.initiative = Array.isArray(next.initiative) ? next.initiative : [];
+            const tokenStillThere = next.tokens.some(t => String(t.id) === String(a.initAdded.tokenId));
+            if (tokenStillThere && !next.initiative.some(i => String(i.tokenId) === String(a.initAdded.tokenId))) {
+                insertInitiative(next, clone(a.initAdded));
+            }
+        }
     }
     next.eventLog.sort((x, y) => (Number(y?.timestamp) || 0) - (Number(x?.timestamp) || 0));
     if (next.eventLog.length > 500) next.eventLog.length = 500;
@@ -362,15 +489,20 @@ function keepPlayerEntities(next, current, playerId) {
             // Поля, которые меняет мастер, берём из версии мастера
             const fromMaster = nextChars.find(x => String(x.id) === String(c.id));
             const result = clone(c);
-            if (fromMaster) for (const f of MASTER_ONLY_CHARACTER_FIELDS) if (f in fromMaster) result[f] = fromMaster[f];
+            if (fromMaster) {
+                for (const f of MASTER_ONLY_CHARACTER_FIELDS) if (f in fromMaster) result[f] = fromMaster[f];
+                // Мастер изменил HP позже, чем игрок, — берём HP мастера
+                if ((Number(fromMaster.hpRev) || 0) > (Number(c.hpRev) || 0)) { result.hpCur = fromMaster.hpCur; result.hpRev = fromMaster.hpRev; }
+            }
             return result;
         })
     ];
 
     const nextTokens = Array.isArray(next.tokens) ? next.tokens : [];
+    const hpOf = new Map(next.characters.filter(c => isOwnChar(c, playerId)).map(c => [String(c.id), c.hpCur]));
     next.tokens = [
         ...nextTokens.filter(t => !(t?.kind === 'character' && ownCharIds.has(String(t.sourceId)))),
-        ...clone(ownTokens)
+        ...clone(ownTokens).map(t => (hpOf.get(String(t.sourceId)) != null ? { ...t, hpCur: hpOf.get(String(t.sourceId)) } : t))
     ];
 
 }
@@ -395,6 +527,8 @@ export function mergePlayerPatch(currentState, patch, playerId) {
         if (existing) {
             for (const f of MASTER_ONLY_CHARACTER_FIELDS) if (f in existing) c[f] = existing[f];
             copyFields(c, existing, SERVER_OWNED_CHARACTER_FIELDS);
+            // Игрок прислал более старое HP (мастер успел ударить) — оставляем свежее
+            if ((Number(c.hpRev) || 0) < (Number(existing.hpRev) || 0)) { c.hpCur = existing.hpCur; c.hpRev = existing.hpRev; }
             if (Number(c.hpCur) > Number(c.hpMax)) c.hpCur = c.hpMax;
             idMap.set(String(raw.id), existing.id);
             return c;
@@ -425,15 +559,22 @@ export function mergePlayerPatch(currentState, patch, playerId) {
             const sourceId = idMap.get(String(raw.sourceId));
             if (sourceId == null) return null;
             const t = { ...raw, sourceId, ownerId: playerId };
+            const owner = normalizedChars.find(ch => String(ch.id) === String(sourceId));
+            if (owner && owner.hpCur != null) t.hpCur = owner.hpCur; // фишка показывает HP персонажа
             for (const f of SERVER_OWNED_TOKEN_FIELDS) delete t[f];
             if (!ownTokenIds.has(String(raw.id))) t.id = allocId();
             return t;
         })
         .filter(Boolean);
 
+    // На поле — не больше одного своего персонажа (уже стоявшая фишка в приоритете)
+    normalizedTokens.sort((a, b) => Number(ownTokenIds.has(String(b.id))) - Number(ownTokenIds.has(String(a.id))));
+    const allowedTokens = normalizedTokens.slice(0, MAX_PLAYER_TOKENS_ON_MAP);
+    if (allowedTokens.length < normalizedTokens.length) remapped = true; // пусть клиент получит правильное состояние
+
     current.tokens = [
         ...currentTokens.filter(t => !(t?.kind === 'character' && ownTokenIds.has(String(t.id)))),
-        ...normalizedTokens
+        ...allowedTokens
     ];
 
     current.nextId = nextId;

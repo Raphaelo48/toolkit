@@ -12,7 +12,7 @@ dotenv.config();
 
 // Импорт после dotenv: хранилище читает DATABASE_URL при загрузке
 const { store } = await import('./store/index.js');
-const { getRoom, getLoadedRoom, flushAll } = await import('./rooms.js');
+const { getRoom, getLoadedRoom, flushAll, stateForPlayer } = await import('./rooms.js');
 const FRONTEND_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const PORT = Number(process.env.PORT || 5000);
@@ -182,8 +182,12 @@ app.delete('/api/rooms/:roomId/players/:playerId', route(async (req, res) => {
 }));
 
 app.get('/api/rooms/:roomId/state', route(async (req, res) => {
+    // Только для участников комнаты; игрок получает свою (урезанную) версию
+    const member = await memberByToken(clean(req.get('X-Player-Token'), 100));
+    if (!member || String(member.room_id) !== String(req.params.roomId)) throw httpError(401, 'Нужно войти в комнату');
     const room = await getRoom(req.params.roomId);
-    res.json({ state: room.state, version: room.version });
+    const state = member.role === 'master' ? room.state : stateForPlayer(room.state, member.user_id);
+    res.json({ state, version: room.version });
 }));
 
 app.get('/api/api.js', (_req, res) => res.sendFile(path.join(FRONTEND_DIR, 'api', 'api.js')));
@@ -266,7 +270,7 @@ async function authenticate(ws, roomId, playerId, token) {
     for (const canvasType of ['draw', 'fog']) {
         if (room.canvases[canvasType]) room.send(ws, { type: 'canvas_update', canvasType, canvas: room.canvases[canvasType] });
     }
-    room.send(ws, room.snapshot({ initial: true }));
+    room.sendSnapshot(ws, { initial: true });
     notifyPlayers(roomId);
     return ctx;
 }
@@ -290,10 +294,10 @@ function onMessage(ws, ctx, raw) {
                 const base = Number(message.baseVersion);
                 const stale = !Number.isFinite(base) || base !== room.version;
                 const { merged } = room.applyMasterState(message.state, Number.isFinite(base) ? base : -1, { replace: message.replace === true });
-                const snap = room.snapshot({ from: playerId });
-                room.broadcast(snap, ws);
+                room.broadcastSnapshot({ from: playerId }, ws);
                 // Если мастер работал со старой версией — отдаём ему итог слияния
-                room.send(ws, stale || merged ? snap : { type: 'ack', version: room.version, seq: message.seq });
+                if (stale || merged) room.sendSnapshot(ws, { from: playerId });
+                else room.send(ws, { type: 'ack', version: room.version, seq: message.seq });
             });
             return;
 
@@ -304,9 +308,9 @@ function onMessage(ws, ctx, raw) {
                 const base = Number(message.baseVersion);
                 const stale = !Number.isFinite(base) || base !== room.version;
                 const { remapped } = room.applyPlayerPatch(message.patch || {}, playerId);
-                const snap = room.snapshot({ from: playerId });
-                room.broadcast(snap, ws);
-                room.send(ws, stale || remapped ? snap : { type: 'ack', version: room.version, seq: message.seq });
+                room.broadcastSnapshot({ from: playerId }, ws);
+                if (stale || remapped) room.sendSnapshot(ws, { from: playerId });
+                else room.send(ws, { type: 'ack', version: room.version, seq: message.seq });
             });
             return;
 
@@ -317,11 +321,25 @@ function onMessage(ws, ctx, raw) {
                 const res = room.applyInventoryAction(action, { role, playerId, name: ctx.name });
                 if (!res.ok) {
                     room.send(ws, { type: 'action_error', message: res.error || 'Действие не выполнено', requestId: message.requestId });
-                    room.send(ws, room.snapshot({ resync: true })); // вернуть клиенту настоящее состояние
+                    room.sendSnapshot(ws, { resync: true }); // вернуть клиенту настоящее состояние
                     return;
                 }
                 // Всем, включая отправителя: так у всех одинаковые id и порядок
-                room.broadcast(room.snapshot({ from: playerId, requestId: message.requestId }));
+                room.broadcastSnapshot({ from: playerId, requestId: message.requestId });
+            });
+            return;
+
+        // Бросок инициативы: игрок — один раз за своего персонажа, кубик бросает сервер
+        case 'initiative_roll':
+            room.run(() => {
+                const res = room.rollInitiative(message.tokenId, message.mod, { role, playerId });
+                if (!res.ok) {
+                    room.send(ws, { type: 'action_error', message: res.error });
+                    room.sendSnapshot(ws, { resync: true });
+                    return;
+                }
+                room.broadcastSnapshot({ from: playerId });
+                room.broadcast({ type: 'initiative_rolled', entry: res.entry, playerName: ctx.name });
             });
             return;
 

@@ -135,10 +135,13 @@ function saveGame() {
 }
 
 function playerCannotLoad() {
-  if (window.dndOnlineGetRole?.() === 'player') {
+  const role = window.dndOnlineGetRole?.();
+  if (role === 'player') {
     toast('В онлайн-комнате загружать сохранения может только мастер', 'error');
     return true;
   }
+  // Загрузка в онлайн-комнате заменяет поле у всех игроков — переспрашиваем
+  if (role === 'master' && !confirm('Загрузить сохранение в комнату? Текущее поле, персонажи и инвентари у всех игроков будут заменены.')) return true;
   return false;
 }
 

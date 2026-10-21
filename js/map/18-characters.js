@@ -119,6 +119,7 @@ function confirmAddCharacter() {
     if (c) {
       const oldName = c.name;
       c.name = name; c.charClass = charClass; c.level = level;
+      if (c.hpCur !== Math.min(hpCur, hpMax) || c.hpMax !== hpMax) bumpHp(c);
       c.xp = xp; c.hpMax = hpMax; c.hpCur = Math.min(hpCur, hpMax); c.emoji = emoji;
       c.image = image; c.color = color;
       state.tokens.forEach(t => {
@@ -208,11 +209,13 @@ function toggleExpand(kind, id) {
 
 function renderCharactersList() {
   const list = document.getElementById('characters-list');
-  if (state.characters.length === 0) {
-    list.innerHTML = '<div class="empty-state">Нет персонажей</div>';
+  // Игрок видит в списке только своих персонажей — чужие и NPC только на карте
+  const visible = isPlayerRole() ? state.characters.filter(isOwnCharacter) : state.characters;
+  if (visible.length === 0) {
+    list.innerHTML = `<div class="empty-state">${isPlayerRole() ? 'Создайте персонажа кнопкой «+»<br><small>до 3 персонажей, на поле — один</small>' : 'Нет персонажей'}</div>`;
     return;
   }
-  list.innerHTML = state.characters.map(c => {
+  list.innerHTML = visible.map(c => {
     const avatarContent = c.image ? `<img src="${c.image}" alt="">` : (c.emoji || '👤');
     const meta = [c.charClass, c.level ? `ур. ${c.level}` : null].filter(Boolean).join(' · ') || 'Персонаж';
     const isExpanded = state.expanded.characters.has(c.id);
@@ -300,6 +303,7 @@ function modCharacterHP(id, delta) {
   if (!c) return;
   const oldHP = c.hpCur;
   c.hpCur = Math.max(0, Math.min(c.hpMax, c.hpCur + delta));
+  bumpHp(c);
   state.tokens.forEach(t => { if (t.kind === 'character' && t.sourceId === id) t.hpCur = c.hpCur; });
   renderCharactersList(); renderTokens(); renderInfoPanel(); renderInitiative();
   const diff = c.hpCur - oldHP;
@@ -322,6 +326,7 @@ function setCharacterHPPrompt(id) {
   if (!Number.isFinite(hp)) { toast('Введите целое число', 'error'); return; }
   const oldHP = c.hpCur;
   c.hpCur = Math.max(0, Math.min(c.hpMax, hp));
+  bumpHp(c);
   state.tokens.forEach(t => { if (t.kind === 'character' && t.sourceId === id) t.hpCur = c.hpCur; });
   renderCharactersList(); renderTokens(); renderInfoPanel(); renderInitiative();
   logEvent('combat', `«${c.name}» HP: ${oldHP} → ${c.hpCur}`);

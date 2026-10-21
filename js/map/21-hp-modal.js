@@ -3,7 +3,8 @@ function openHpModal(tokenId) {
   closeContextMenu();
   state.hpModalTokenId = tokenId;
   const token = state.tokens.find(t => t.id === tokenId);
-  if (!token) return;
+  if (!token || token.hpMax == null) return;
+  if (!canControlToken(token)) { toast('Можно менять HP только своего персонажа', 'error'); return; }
   document.getElementById('hp-modal-current').textContent = token.hpCur;
   document.getElementById('hp-modal-max').textContent = token.hpMax;
   document.getElementById('hp-modal-input').value = token.hpCur;
@@ -33,7 +34,7 @@ function hpModalSetMax() {
 
 function confirmHpModal() {
   const token = state.tokens.find(t => t.id === state.hpModalTokenId);
-  if (!token) return;
+  if (!token || !canControlToken(token)) return;
   const v = parseInt(document.getElementById('hp-modal-input').value);
   if (isNaN(v)) return;
   const oldHP = token.hpCur;
@@ -47,8 +48,13 @@ function confirmHpModal() {
       if (src) src.hpCur = token.hpCur;
     }
   }
+  if (token.kind === 'character') {
+    bumpHp(state.characters.find(c => c.id === token.sourceId));
+    state.tokens.forEach(t => { if (t.kind === 'character' && t.sourceId === token.sourceId) t.hpCur = token.hpCur; });
+  }
   closeModal('hp-modal');
   renderTokens(); renderInfoPanel(); renderCharactersList(); renderMonstersList(); renderInitiative();
+  window.dndOnlineSync?.('token_hp');
   const diff = token.hpCur - oldHP;
   const sign = diff > 0 ? '+' : '';
   logEvent('combat', `«${token.name}» HP: ${oldHP} → ${token.hpCur} (${sign}${diff})`);

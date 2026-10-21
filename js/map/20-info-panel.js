@@ -45,6 +45,7 @@ function renderInfoPanel() {
         </div>`;
   }
 
+  const canControl = canControlToken(token);
   const hasHP = token.hpMax != null;
   const hpPercent = hasHP ? Math.max(0, Math.min(100, (token.hpCur / token.hpMax) * 100)) : 0;
   const hpClass = hpPercent < 25 ? 'low' : hpPercent < 50 ? 'mid' : '';
@@ -94,7 +95,7 @@ function renderInfoPanel() {
   const role = window.dndOnlineGetRole?.();
   const myId = window.DND_ONLINE?.meta?.player?.id;
   const isOwnChar = token.kind === 'character' && String(token.ownerId) === String(myId);
-  const showInventoryBtn = canOpenInventory && (role !== 'player' || isOwnChar);
+  const showInventoryBtn = canOpenInventory && (role !== 'player' || isOwnChar) && canControl;
 
   panel.innerHTML = `
     <div class="info-panel">
@@ -117,12 +118,13 @@ function renderInfoPanel() {
           <div class="hp-bar">
             <div class="hp-fill ${hpClass}" style="width:${hpPercent}%"></div>
           </div>
-          <div class="hp-controls" style="margin-top:8px;">
+          ${canControl ? `<div class="hp-controls" style="margin-top:8px;">
             <button class="btn btn-sm btn-danger" onclick="modTokenHP(${token.id}, -5)">−5</button>
             <button class="btn btn-sm btn-danger" onclick="modTokenHP(${token.id}, -1)">−1</button>
             <button class="btn btn-sm" onclick="modTokenHP(${token.id}, 1)">+1</button>
             <button class="btn btn-sm" onclick="modTokenHP(${token.id}, 5)">+5</button>
-          </div>
+            <button class="btn btn-sm" onclick="openHpModal(${token.id})">HP…</button>
+          </div>` : ''}
         </div>
       ` : ''}
 
@@ -140,10 +142,16 @@ function renderInfoPanel() {
 
       ${conditionsHtml}
 
-      <div>
+      ${canControl || token.notes ? `<div>
         <div class="label">Заметки</div>
         <div class="info-notes ${token.notes ? '' : 'empty'}">${token.notes ? escapeHtml(token.notes) : 'Нет заметок'}</div>
-      </div>
+      </div>` : ''}
+
+      ${isPlayerRole() && canControl ? `
+        <div style="display:flex; gap:6px;">
+          ${state.initiative.some(i => i.tokenId === token.id) ? '' : `<button class="btn btn-sm btn-primary" style="flex:1" onclick="rollMyInitiative(${token.id})">⚡ Бросить инициативу</button>`}
+          <button class="btn btn-sm" style="flex:1" onclick="removeMyTokenFromMap(${token.id})">Убрать с поля</button>
+        </div>` : ''}
 
       ${lootActions ? `<div style="display:flex; gap:6px;">${lootActions}</div>` : ''}
       ${pickupLootBtn ? `<div style="display:flex; gap:6px;">${pickupLootBtn}</div>` : ''}
@@ -182,12 +190,13 @@ function openLootChestForToken(tokenId) {
 function modTokenHP(id, delta) {
   const token = state.tokens.find(t => t.id === id);
   if (!token || token.hpMax == null) return;
+  if (!canControlToken(token)) { toast('Можно менять HP только своего персонажа', 'error'); return; }
   const oldHP = token.hpCur;
   token.hpCur = Math.max(0, Math.min(token.hpMax, token.hpCur + delta));
   if (token.sourceId) {
     if (token.kind === 'character') {
       const src = state.characters.find(c => c.id === token.sourceId);
-      if (src) src.hpCur = token.hpCur;
+      if (src) { src.hpCur = token.hpCur; bumpHp(src); }
     } else if (token.kind === 'monster') {
       const src = state.monsters.find(m => m.id === token.sourceId);
       if (src) src.hpCur = token.hpCur;
@@ -270,4 +279,15 @@ function toggleCondition(tokenId, conditionId) {
     closeContextMenu();
     openTokenContextMenu(rect.left + 10, rect.top + 10, tokenId);
   }
+}
+
+
+/** Игрок убирает свою фишку с поля (сам персонаж остаётся в списке). */
+function removeMyTokenFromMap(tokenId) {
+  const token = state.tokens.find(t => t.id === tokenId);
+  if (!token || !canControlToken(token)) return;
+  state.tokens = state.tokens.filter(t => t.id !== tokenId);
+  if (state.selectedTokenId === tokenId) state.selectedTokenId = null;
+  renderTokens(); renderInfoPanel();
+  window.dndOnlineSync?.('token_remove');
 }

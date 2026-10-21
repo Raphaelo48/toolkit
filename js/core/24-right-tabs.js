@@ -17,6 +17,10 @@ function switchRightTab(tab) {
 // Скрываем/показываем вкладку Награды в зависимости от роли
 function applyRoleTabVisibility() {
   const role = window.dndOnlineGetRole?.();
+  // Игрок не видит инструментов мастера (см. .gm-only / .player-only в style.css)
+  document.body.classList.toggle('role-player', role === 'player');
+  if (role === 'player' && !['select', 'pan', 'measure'].includes(state.tool)) setTool('select');
+  renderCharactersList?.(); renderInitiative?.(); renderInfoPanel?.();
   const lootTab = document.getElementById('tab-loot-btn');
   if (!lootTab) return;
   if (role === 'player') {

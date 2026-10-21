@@ -1,6 +1,6 @@
 // ============ TOOLS ============
 function setTool(tool) {
-  if (window.dndOnlineCan && !window.dndOnlineCan('master') && ['brush','eraser','fog','text','measure','shape'].includes(tool)) {
+  if (window.dndOnlineCan && !window.dndOnlineCan('master') && ['brush','eraser','fog','text','shape'].includes(tool)) {
     toast('Инструменты карты доступны только мастеру', 'error');
     tool = 'select';
   }

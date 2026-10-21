@@ -59,7 +59,7 @@ function renderLog() {
           <span class="log-entry-type">${cfg.label}</span>
           <span class="log-entry-time">${time}</span>
         </div>
-        <div class="log-entry-message">${escapeHtml(e.message)}</div>
+        <div class="log-entry-message">${e.data?.gm ? '<span title="Видит только мастер">🔒 </span>' : ''}${escapeHtml(e.message)}</div>
       </div>
     `;
   }).join('');

@@ -604,3 +604,8 @@ button:disabled{opacity:.4;cursor:not-allowed;pointer-events:none;}
 .table-detail-text{display:flex;flex-direction:column;gap:4px;color:var(--text-1);font-size:12px;line-height:1.4}
 .table-detail-text span{color:var(--text-2)}
 .table-placed-note{margin-top:8px;font-size:11px;color:var(--success)}
+
+/* ===== Роли: игрок не видит инструментов мастера ===== */
+body.role-player .gm-only, body.role-player .gm-only-inline { display: none !important; }
+body:not(.role-player) .player-only, body:not(.role-player) .player-only-inline { display: none !important; }
+.init-roll-hint { font-size: 11px; color: var(--text-2); margin: -4px 0 10px; text-align: center; }

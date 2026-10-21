@@ -90,7 +90,7 @@ function logTableRoll(isReroll) {
   let text = `🎲 ${table.name}: ${entry.icon} ${entry.name} (${r.roll}/${r.sides})`;
   if (r.creatures) text += ` — ${r.creatures.length} сущ.`;
   if (r.npc) text += ` — ${r.npc.name}`;
-  logEvent('dice', text + (isReroll ? ' — переброс' : ''));
+  logEvent('dice', text + (isReroll ? ' — переброс' : ''), { gm: true }); // игроки этого не видят
 }
 
 function canPlaceTableResult(r) {
@@ -174,7 +174,7 @@ function placeTableResult(silent) {
       id: state.nextId++, name: r.npc.name, type: 'npc', emoji: r.npc.icon, image: null,
       color: '#b8ad98', size: 44, notes: npcNotes(r.npc), x: r.x, y: r.y, kind: 'npc', conditions: []
     });
-    logEvent('token', `👤 На карте NPC: ${r.npc.name} (${r.npc.occupation.toLowerCase()})`);
+    logEvent('token', `👤 На карте NPC: ${r.npc.name} (${r.npc.occupation.toLowerCase()})`, { gm: true });
   } else if (r.tableId === 'trap') {
     tokens.push({
       id: state.nextId++, name: entry.name, type: 'object', emoji: entry.icon, image: null,

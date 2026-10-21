@@ -216,6 +216,7 @@
   function connect(){
     if(!inRoom()) return;
     conn.stopped = false;
+    window.dndApplyRoleUI?.();
     closeSocket();
     clearTimeout(conn.retryTimer);
     openSocket();

@@ -382,6 +382,12 @@
       case 'dice_roll':
         handleDiceRoll(m);
         return;
+      case 'initiative_rolled': {
+        const e = m.entry || {};
+        const sign = e.mod ? (e.mod > 0 ? ` + ${e.mod}` : ` − ${-e.mod}`) : '';
+        toastSafe(`⚡ ${e.name}: инициатива ${e.value} (d20 ${e.roll}${sign})`);
+        return;
+      }
       case 'action_error':
         toastSafe(m.message || 'Действие не выполнено', 'error');
         return;
@@ -395,6 +401,7 @@
 
   online.publishState = publishState;
   online.sendCanvas = sendCanvas;
+  online.sendInitiativeRoll = (tokenId, mod) => ready() && send({ type:'initiative_roll', tokenId, mod });
   online.inRoom = () => !!online.meta && !!window.dndOnlineGetRole?.();
   online.isReady = ready;
   online.signatureNow = currentSignature;

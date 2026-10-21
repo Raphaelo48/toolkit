@@ -47,7 +47,7 @@ function addHiddenArea(x, y) {
   state.tokens.push(token);
   renderTokens();
   selectToken(token.id);
-  logEvent('map', `⚠ Скрытая зона: «${name}»`);
+  logEvent('map', `⚠ Скрытая зона: «${name}»`, { gm: true });
   toast('Скрытая зона добавлена', 'map');
   window.dndOnlineSync?.('object_change');
 }
@@ -81,9 +81,19 @@ function pasteLastToken(x, y) {
 }
 
 function spawnCharacterAt(charId, x, y) {
-  if (window.dndOnlineGetRole?.() === 'player') { const c = state.characters.find(ch => ch.id === charId); if (!c || String(c.ownerId) !== String(window.DND_ONLINE?.meta?.player?.id)) { toast('Можно размещать только своего персонажа', 'error'); return; } }
   const c = state.characters.find(ch => ch.id === charId);
   if (!c) return;
+  if (isPlayerRole()) {
+    if (!isOwnCharacter(c)) { toast('Можно размещать только своего персонажа', 'error'); return; }
+    // На поле — только один свой персонаж
+    const onMap = myTokenOnMap();
+    if (onMap && onMap.sourceId === c.id) { selectToken(onMap.id); toast(`«${c.name}» уже на поле`); return; }
+    if (onMap) {
+      if (!confirm(`На поле может стоять только один ваш персонаж.\nУбрать «${onMap.name}» и поставить «${c.name}»?`)) return;
+      state.tokens = state.tokens.filter(t => t.id !== onMap.id);
+      x = onMap.x; y = onMap.y;
+    }
+  }
   const token = {
     id: state.nextId++, name: c.name, type: 'character',
     emoji: c.emoji, image: c.image, color: c.color, size: 50,
