@@ -62,12 +62,12 @@ function performRoll(sides, modifierStr) {
 
 function formatRollResult(result) {
   const parts = [];
-  parts.push(`<span class="roll-val">d${result.sides}=[${result.mainRolls.join(',')}]</span>`);
-  result.extraDiceResults.forEach(ed => {
+  parts.push(`<span class="roll-val">d${result.sides}=[${(result.mainRolls || []).join(',')}]</span>`);
+  (result.extraDiceResults || []).forEach(ed => {
     const sign = ed.sign > 0 ? '+' : '−';
     parts.push(`${sign}<span class="roll-val">${ed.count}d${ed.sides}=[${ed.rolls.join(',')}]</span>`);
   });
-  if (result.fixed !== 0) {
+  if (result.fixed) {
     const sign = result.fixed > 0 ? '+' : '−';
     parts.push(`<span class="mod-val">${sign}${Math.abs(result.fixed)}</span>`);
   }
@@ -75,6 +75,7 @@ function formatRollResult(result) {
 }
 
 function rollSelectedDice() {
+  if (isPlayerRole()) { toast('Кубики бросаются по запросу мастера — смотрите панель справа'); return; }
   const modStr = document.getElementById('dice-mod').value.trim();
   const result = performRoll(state.selectedDice, modStr);
   showDiceResult(result);
@@ -145,6 +146,7 @@ function showDiceResult(result) {
 }
 
 function rerollLastDice() {
+  if (isPlayerRole()) { toast('Кубики бросаются по запросу мастера — смотрите панель справа'); return; }
   if (!state.lastDiceRoll) { rollSelectedDice(); return; }
   const result = performRoll(state.lastDiceRoll.sides, state.lastDiceRoll.modStr);
   state.diceHistory.unshift({

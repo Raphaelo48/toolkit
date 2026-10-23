@@ -346,6 +346,49 @@ function onMessage(ws, ctx, raw) {
             });
             return;
 
+        // Запрос броска от мастера: «Проверка Ловкости, d20, КС 15»
+        case 'roll_request_create':
+            if (role !== 'master') return deny('Запрашивать броски может только мастер.');
+            room.run(() => {
+                const req = room.createRollRequest(message.request || {});
+                room.pushLog(`📣 Мастер просит бросок: ${req.label} (d${req.sides}${req.dc ? `, КС ${req.dc}` : ''})`);
+                room.broadcastSnapshot({ from: playerId });
+                room.broadcast({ type: 'roll_requested', request: { id: req.id, label: req.label, sides: req.sides, targets: req.targets } }, ws);
+            });
+            return;
+
+        case 'roll_request_close':
+            if (role !== 'master') return deny('Закрывать броски может только мастер.');
+            room.run(() => { if (room.closeRollRequest(message.id)) room.broadcastSnapshot({ from: playerId }); });
+            return;
+
+        // Игрок бросает по запросу; кубик бросает сервер. Повтор — за вдохновение
+        case 'roll_request_roll':
+            room.run(() => {
+                const res = role === 'master'
+                    ? { ok: false, error: 'Мастер бросает кубики сам, без запроса' }
+                    : room.rollForRequest(message.id, playerId, ctx.name, message.charId, message.mod);
+                if (!res.ok) return room.send(ws, { type: 'action_error', message: res.error });
+                room.pushLog(`${res.roll.title}: ${res.roll.total} (${res.roll.detail})`);
+                room.addDiceRoll({ time: Date.now(), sides: res.roll.sides, modStr: res.roll.modifierStr, total: res.roll.total, isCrit: res.roll.isCrit, isFail: res.roll.isFail, playerName: ctx.name });
+                room.broadcast({ type: 'dice_roll', roll: res.roll, from: playerId, playerName: ctx.name, version: room.version, serverRoll: true, fromRequest: true });
+                room.broadcastSnapshot({ from: playerId });
+            });
+            return;
+
+        // Атака игрока из листа персонажа: в свой ход, один раз каждой рукой
+        case 'attack_roll':
+            room.run(() => {
+                if (role === 'master') return room.send(ws, { type: 'action_error', message: 'Мастер атакует без ограничений — бросок делается у него' });
+                const res = room.playerAttack(playerId, message.charId, String(message.slot || 'mainhand'));
+                if (!res.ok) return room.send(ws, { type: 'action_error', message: res.error });
+                room.pushLog(res.log, 'combat');
+                room.addDiceRoll({ time: Date.now(), sides: 20, modStr: res.roll.modifierStr, total: res.roll.total, isCrit: res.roll.isCrit, isFail: res.roll.isFail, playerName: ctx.name });
+                room.broadcast({ type: 'dice_roll', roll: res.roll, from: playerId, playerName: ctx.name, version: room.version, serverRoll: true });
+                room.broadcastSnapshot({ from: playerId });
+            });
+            return;
+
         // Стены для обзора (мастер распознал по карте или дорисовал)
         case 'vision_walls':
             if (role !== 'master') return deny('Стены задаёт только мастер.');
@@ -386,6 +429,8 @@ function onMessage(ws, ctx, raw) {
             return;
 
         case 'dice_roll':
+            // Игрок бросает только по запросу мастера (roll_request_roll) или атакой в свой ход
+            if (role !== 'master' && !message.roll?.fromItem) return deny('Кубики бросаются по запросу мастера.');
             room.run(() => {
                 const r = message.roll && typeof message.roll === 'object' ? message.roll : {};
                 const playerName = clean(message.playerName || ctx.name, 80) || 'Игрок';

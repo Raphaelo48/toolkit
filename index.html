@@ -20,16 +20,16 @@
     </button>
     <div class="logo">
       <div class="logo-mark">D</div>
-      <span>DM Toolkit</span>
+      <span class="logo-text">DM Toolkit</span>
     </div>
     <div class="topbar-sep"></div>
     <span class="topbar-status" id="topbar-status">Готово к игре</span>
-    <button class="btn btn-sm inv-btn" onclick="openMyInventory()" title="Инвентари персонажей и общий склад">🎒 Инвентарь</button>
+    <button class="btn btn-sm inv-btn" onclick="openMyInventory()" title="Инвентари персонажей и общий склад">🎒<span class="tb-label"> Инвентарь</span></button>
     <button class="btn btn-sm boards-btn" id="boards-btn" onclick="toggleBoardsMenu(event)">⚔ Игровая карта</button>
-    <button class="btn btn-sm online-btn" onclick="openOnlinePanel()">🌐 Онлайн</button>
+    <button class="btn btn-sm online-btn" onclick="openOnlinePanel()" title="Онлайн-игра">🌐<span class="tb-label"> Онлайн</span></button>
     <div class="topbar-sep"></div>
 
-    <div class="dice-group">
+    <div class="dice-group gm-only" title="Игроки бросают по запросу мастера">
       <button class="dice-btn" onclick="selectDice(4)" data-dice="4">d4</button>
       <button class="dice-btn" onclick="selectDice(6)" data-dice="6">d6</button>
       <button class="dice-btn" onclick="selectDice(8)" data-dice="8">d8</button>
@@ -42,7 +42,7 @@
         <input type="text" id="dice-mod" class="dice-mod-input" placeholder="+0" value="+0" title="Модификатор (например: +5, -2, +3d6)">
         <button class="dice-roll-btn" onclick="rollSelectedDice()" title="Бросить выбранный кубик">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1" fill="currentColor"/><circle cx="16" cy="8" r="1" fill="currentColor"/><circle cx="8" cy="16" r="1" fill="currentColor"/><circle cx="16" cy="16" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>
-          Бросить
+          <span class="tb-label">Бросить</span>
         </button>
       </div>
     </div>
@@ -52,16 +52,16 @@
       <svg style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
       Карта
     </button>
-    <button class="gm-only btn btn-sm" onclick="saveGame()">
-      <svg style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
-      Сохранить
-    </button>
-    <button class="gm-only btn btn-sm" onclick="loadGame()">
-      <svg style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-      Загрузить
-    </button>
-    <button class="gm-only btn btn-sm" onclick="exportJSON()">Экспорт</button>
-    <button class="gm-only btn btn-sm" onclick="document.getElementById('import-input').click()">Импорт</button>
+    <div class="gm-only file-menu-wrap">
+      <button class="btn btn-sm" id="file-btn" onclick="toggleFileMenu(event)" title="Сохранение, загрузка, экспорт">☰ Файл ▾</button>
+      <div class="file-menu" id="file-menu">
+        <button onclick="closeFileMenu(); saveGame()">💾 Сохранить</button>
+        <button onclick="closeFileMenu(); loadGame()">📂 Загрузить</button>
+        <div class="boards-sep"></div>
+        <button onclick="closeFileMenu(); exportJSON()">⬇ Экспорт в файл</button>
+        <button onclick="closeFileMenu(); document.getElementById('import-input').click()">⬆ Импорт из файла</button>
+      </div>
+    </div>
     <input type="file" id="import-input" class="hidden-input" accept=".json" onchange="importJSON(event)">
     <input type="file" id="map-input" class="hidden-input" accept="image/*" onchange="handleMapUpload(event)">
     <div class="topbar-sep"></div>
@@ -80,30 +80,30 @@
   <aside class="sidebar-left">
     <div class="section">
       <div class="section-title">Инструменты</div>
-      <div class="tool-list">
+      <div class="tool-list tool-grid">
         <button class="tool-item active" data-tool="select" onclick="setTool('select')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg>
           <span class="tool-label">Выбор</span>
           <span class="tool-key">1</span>
         </button>
-        <button class="tool-item" data-tool="pan" onclick="setTool('pan')">
+        <button title="Перемещение карты (2)" class="tool-item" data-tool="pan" onclick="setTool('pan')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>
-          <span class="tool-label">Перемещение карты</span>
+          <span class="tool-label">Сдвиг карты</span>
           <span class="tool-key">2</span>
         </button>
-        <button class="gm-only tool-item" onclick="openTokenModal()">
+        <button title="Добавить токен (3)" class="gm-only tool-item" onclick="openTokenModal()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
-          <span class="tool-label">Добавить токен</span>
+          <span class="tool-label">Токен</span>
           <span class="tool-key">3</span>
         </button>
-        <button class="tool-item" onclick="openCharacterModal()">
+        <button title="Добавить персонажа (4)" class="tool-item" onclick="openCharacterModal()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-          <span class="tool-label">Добавить персонажа</span>
+          <span class="tool-label">Персонаж</span>
           <span class="tool-key">4</span>
         </button>
-        <button class="gm-only tool-item" onclick="openMonsterModal()">
+        <button title="Добавить монстра (5)" class="gm-only tool-item" onclick="openMonsterModal()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-          <span class="tool-label">Добавить монстра</span>
+          <span class="tool-label">Монстр</span>
           <span class="tool-key">5</span>
         </button>
         <button class="tool-item" data-tool="grid" onclick="toggleGrid()">
@@ -116,7 +116,7 @@
 
     <div class="section">
       <div class="section-title"><span class="gm-only-inline">Рисование на карте</span><span class="player-only-inline">Измерение</span></div>
-      <div class="tool-list">
+      <div class="tool-list tool-grid">
         <button class="gm-only tool-item" data-tool="brush" onclick="setTool('brush')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 114.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 00-3-3.02z"/></svg>
           <span class="tool-label">Кисть</span>
@@ -127,9 +127,9 @@
           <span class="tool-label">Ластик</span>
           <span class="tool-key">E</span>
         </button>
-        <button class="gm-only tool-item" data-tool="fog" onclick="setTool('fog')">
+        <button title="Туман войны (F)" class="gm-only tool-item" data-tool="fog" onclick="setTool('fog')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h18M3 14h18M5 18h14M5 6h14"/></svg>
-          <span class="tool-label">Туман войны</span>
+          <span class="tool-label">Туман</span>
           <span class="tool-key">F</span>
         </button>
         <button class="tool-item" data-tool="measure" onclick="setTool('measure')">
@@ -147,9 +147,9 @@
           <span class="tool-label">Фигура</span>
           <span class="tool-key">S</span>
         </button>
-        <button class="gm-only tool-item" onclick="clearDrawings()">
+        <button title="Очистить все рисунки на карте" class="gm-only tool-item" onclick="clearDrawings()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
-          <span class="tool-label">Очистить рисунки</span>
+          <span class="tool-label">Очистить</span>
           <span class="tool-key">—</span>
         </button>
       </div>
@@ -162,7 +162,7 @@
 
     <div class="section gm-only">
       <div class="section-title">Настройки сетки</div>
-      <div style="padding: 4px 16px 16px;">
+      <div class="section-body" style="padding: 2px 14px 10px;">
         <div style="display:flex; align-items:center; gap:8px;">
           <label class="label" style="margin:0; flex-shrink:0;">Размер клетки</label>
           <input type="number" id="grid-size" class="input input-sm" value="50" min="10" max="200" style="width:70px" onchange="updateGrid()">
@@ -758,6 +758,7 @@
     <script src="js/map/32-vision.js"></script>
     <script src="js/map/33-arrows.js"></script>
     <script src="js/map/34-boards.js"></script>
+    <script src="js/map/35-rolls.js"></script>
     <script src="api/api.js"></script>
     <script src="js/online/campaigns.js"></script>
     <script src="js/online/realtime.js"></script>

@@ -227,6 +227,7 @@
       if(Array.isArray(shared.eventLog)) state.eventLog = shared.eventLog;
       if(shared.party && typeof shared.party === 'object') state.party = shared.party;
       if(shared.vision && typeof shared.vision === 'object') state.vision = shared.vision;
+      state.rollRequests = Array.isArray(shared.rollRequests) ? shared.rollRequests : [];
       if(Array.isArray(shared.boards)) state.boards = shared.boards;
       if(shared.inventory) state.inventory = shared.inventory; // старый формат
       window.InventoryCore?.migrate(state);
@@ -235,7 +236,7 @@
       sizeMapLayers();
       renderAll?.(); drawGrid?.(); renderShapes?.(); updateMapTransform?.(); renderLogFilters?.(); renderLog?.();
       window.dndInventoryRefresh?.();
-      window.renderVisionPanel?.(); window.dndVisionRender?.(); window.dndBoardsChanged?.();
+      window.renderVisionPanel?.(); window.dndVisionRender?.(); window.dndBoardsChanged?.(); window.renderRollRequests?.();
       online.lastSignature = currentSignature();
     } catch(err){
       console.error('[D&D Online] apply state failed', err);
@@ -321,6 +322,12 @@
   function handleDiceRoll(m){
     if(!m.roll) return;
     const r = m.roll;
+    // Бросок сделал сервер (по запросу мастера, атака): история и журнал придут в снимке состояния
+    if(m.serverRoll){
+      // Чужой бросок по запросу — короткое уведомление (итоги у мастера в панели), свой — окно с кубиком
+      if(m.fromRequest && String(m.from) !== String(online.meta?.player?.id)){ toast?.(`${r.title} = ${r.total}${r.isCrit ? ' 🌟' : r.isFail ? ' 💀' : ''}`); return; }
+      showDiceResult?.(r); return;
+    }
     state.diceHistory.unshift({ time:r.time || Date.now(), sides:r.sides, modStr:r.modifierStr || r.modStr || '', total:r.total, isCrit:!!r.isCrit, isFail:!!r.isFail, playerName:m.playerName || 'Игрок' });
     if(state.diceHistory.length > 20) state.diceHistory.length = 20;
     if(Number(m.version) > online.version && !online.pending) online.version = Number(m.version);
@@ -396,6 +403,9 @@
         toastSafe(`⚡ ${e.name}: инициатива ${e.value} (d20 ${e.roll}${sign})`);
         return;
       }
+      case 'roll_requested':
+        window.dndRollRequested?.(m.request);
+        return;
       case 'board_image':
         window.dndBoardImage?.(m);
         return;
@@ -419,6 +429,10 @@
   online.publishState = publishState;
   online.flushPending = () => setTimeout(flushPending, 0);
   online.sendCanvas = sendCanvas;
+  online.sendRollRequest = request => ready() && send({ type:'roll_request_create', request });
+  online.closeRollRequest = id => ready() && send({ type:'roll_request_close', id });
+  online.rollForRequest = (id, charId, mod) => ready() && send({ type:'roll_request_roll', id, charId, mod });
+  online.sendAttack = (charId, slot) => ready() && send({ type:'attack_roll', charId, slot });
   online.sendBoardImage = (id, src) => ready() && send({ type:'board_image', id, src });
   online.sendVisionWalls = walls => ready() && send({ type:'vision_walls', walls });
   online.sendInitiativeRoll = (tokenId, mod) => ready() && send({ type:'initiative_roll', tokenId, mod });

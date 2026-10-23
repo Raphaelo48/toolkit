@@ -235,7 +235,7 @@ function renderCharactersList() {
           <div class="list-item-avatar" style="border-color:${c.color}" onclick="spawnCharacterToken(${c.id})" title="Разместить на карте">${avatarContent}</div>
           <div class="list-item-info" onclick="spawnCharacterToken(${c.id})" title="Разместить на карте">
             <div class="list-item-name">${escapeHtml(c.name)}</div>
-            <div class="list-item-meta">${escapeHtml(meta)} · HP ${c.hpCur}/${c.hpMax}</div>
+            <div class="list-item-meta">${escapeHtml(meta)} · HP ${c.hpCur}/${c.hpMax}${Number(c.inspiration) > 0 ? ` · ✨${c.inspiration}` : ''}</div>
           </div>
           <div class="list-item-actions">
             <button class="icon-btn" ${isOwn ? '' : 'disabled'} onclick="event.stopPropagation(); openCharacterModal(${c.id})" title="Редактировать">

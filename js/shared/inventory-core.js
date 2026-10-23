@@ -255,6 +255,18 @@
         if (Array.isArray(token.contents)) { result.ok = true; return result; } // уже открыт — ничего не делаем
         token.contents = (Array.isArray(action.contents) ? action.contents : []).slice(0, 50).map(normChestEntry).filter(Boolean);
         result.log = `📦 Открыт «${token.name}»`;
+        const opener = action.who ? resolve(state, action.who) : null;
+        const bonus = grantChestInspiration(token, opener, actor);
+        if (bonus) result.log += `. ${bonus}`;
+        break;
+      }
+
+      case 'chest_open': { // уже заполненный сундук открыт игроком: вдохновение за особый сундук
+        const token = (state.tokens || []).find(t => sameId(t.id, action.tokenId));
+        if (!token || !token.isLootChest) return fail('Сундук не найден');
+        const bonus = grantChestInspiration(token, action.who ? resolve(state, action.who) : null, actor);
+        if (!bonus) { result.ok = true; return result; }
+        result.log = bonus;
         break;
       }
 
@@ -278,6 +290,8 @@
           if (entry.qty <= 0) token.contents.splice(int(action.index, 0, 1000), 1);
           result.log = `${to.icon} «${to.name}» берёт из «${token.name}» ${itemLabel(entry, n)}`;
         }
+        const bonus = grantChestInspiration(token, to, actor);
+        if (bonus) result.log += `. ${bonus}`;
         break;
       }
 
@@ -410,6 +424,20 @@
         break;
       }
 
+      /* ---------- вдохновение ---------- */
+
+      case 'inspiration': {
+        if (!isMaster(actor)) return fail('Вдохновение выдаёт мастер');
+        const box = resolve(state, action.who);
+        if (!box || box.kind !== 'character') return fail('Не найдено');
+        const c = box.character;
+        const before = int(c.inspiration, 0, 99);
+        c.inspiration = Math.max(0, Math.min(99, before + int(action.delta, -99, 99)));
+        if (c.inspiration === before) return fail('Вдохновение не изменилось');
+        result.log = `${box.icon} «${box.name}»: вдохновение ${c.inspiration > before ? '+' : '−'}${Math.abs(c.inspiration - before)} (стало ${c.inspiration})${action.note ? ' — ' + str(action.note, 80) : ''}`;
+        break;
+      }
+
       case 'effect_remove': {
         const box = resolve(state, action.who);
         if (!box || box.kind !== 'character') return fail('Не найдено');
@@ -435,6 +463,16 @@
       if (state.eventLog.length > MAX_LOG) state.eventLog.length = MAX_LOG;
     }
     return result;
+  }
+
+  // Запертый и древний сундук: первый игрок, добравшийся до него, получает вдохновение
+  const INSPIRING_CHESTS = ['chest_locked', 'chest_ancient'];
+  function grantChestInspiration(token, box, actor) {
+    if (!token || !INSPIRING_CHESTS.includes(token.lootId) || token.inspirationGiven) return '';
+    if (isMaster(actor) || !box || box.kind !== 'character' || !canManage(box, actor)) return '';
+    token.inspirationGiven = true;
+    box.character.inspiration = Math.min(99, int(box.character.inspiration, 0, 99) + 1);
+    return `✨ «${box.name}» получает вдохновение за «${token.name}»`;
   }
 
   function normChestEntry(raw) {

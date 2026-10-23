@@ -34,8 +34,8 @@ const GM_ONLY_TOKEN_KINDS = new Set(['hidden', 'trap']);
 // Эти поля персонажа меняет только мастер
 const MASTER_ONLY_CHARACTER_FIELDS = ['xp', 'level', 'hpMax', 'visionRadius'];
 // Эти поля меняются только действиями инвентаря на сервере — никакой снимок их не перезапишет
-const SERVER_OWNED_CHARACTER_FIELDS = ['inventory', 'coins', 'equipment', 'effects'];
-const SERVER_OWNED_TOKEN_FIELDS = ['inventory', 'coins', 'contents', 'item', 'qty'];
+const SERVER_OWNED_CHARACTER_FIELDS = ['inventory', 'coins', 'equipment', 'effects', 'inspiration'];
+const SERVER_OWNED_TOKEN_FIELDS = ['inventory', 'coins', 'contents', 'item', 'qty', 'inspirationGiven'];
 const ACTION_HISTORY_LIMIT = 300;
 
 const rooms = new Map(); // roomId(string) → Room
@@ -115,6 +115,7 @@ class Room {
         if (replace) {
             // Мастер загрузил сохранение — оно заменяет всё, включая инвентари
             next.diceHistory = Array.isArray(current.diceHistory) ? current.diceHistory : (next.diceHistory || []);
+            next.rollRequests = current.rollRequests || [];
             next.nextId = Math.max(Number(next.nextId) || 1, maxId(next) + 1);
             this.state = next;
             this.version++;
@@ -133,6 +134,8 @@ class Room {
         }
         // Инвентари, деньги и сундуки — только с сервера
         if (keepServerOwned(next, current)) merged = true;
+        next.rollRequests = current.rollRequests || [];
+        next.attacksUsed = current.attacksUsed || {};
         // Действия, которых мастер ещё не видел, повторяем поверх его снимка
         if (replayActions(next, this.actionHistory.filter(a => a.version > baseVersion))) merged = true;
         // История кубиков ведётся сервером
@@ -174,6 +177,135 @@ class Room {
         if (this.actionHistory.length > ACTION_HISTORY_LIMIT) this.actionHistory.splice(0, this.actionHistory.length - ACTION_HISTORY_LIMIT);
         this.markDirty();
         return res;
+    }
+
+    /* ---------- запросы бросков, вдохновение, атаки ---------- */
+
+    rollRequests() {
+        if (!Array.isArray(this.state.rollRequests)) this.state.rollRequests = [];
+        return this.state.rollRequests;
+    }
+
+    /** Мастер просит бросок: «Проверка Ловкости, d20, КС 15» — у каждого цели один бросок. */
+    createRollRequest(p) {
+        const sides = [4, 6, 8, 10, 12, 20, 100].includes(Number(p?.sides)) ? Number(p.sides) : 20;
+        const targets = Array.isArray(p?.targets) ? p.targets.map(String).slice(0, 20) : 'all';
+        const req = {
+            id: Date.now() + Math.floor(Math.random() * 1000), label: String(p?.label || 'Бросок').slice(0, 80), sides,
+            dc: Number(p?.dc) > 0 ? Math.min(40, Math.trunc(Number(p.dc))) : null, showDc: p?.showDc !== false,
+            targets, open: true, createdAt: Date.now(), results: {}
+        };
+        const list = this.rollRequests();
+        list.push(req);
+        // Храним немного: закрытые старые уходят
+        while (list.length > 12) {
+            const i = list.findIndex(r => !r.open);
+            list.splice(i >= 0 ? i : 0, 1);
+        }
+        this.version++;
+        this.markDirty();
+        return req;
+    }
+
+    closeRollRequest(id) {
+        const req = this.rollRequests().find(r => String(r.id) === String(id));
+        if (!req) return false;
+        req.open = false;
+        this.version++;
+        this.markDirty();
+        return true;
+    }
+
+    /** Персонаж игрока, от чьего имени он бросает: указанный (если свой) или тот, что на поле. */
+    playerCharacter(playerId, charId) {
+        const own = (this.state.characters || []).filter(c => isOwnChar(c, playerId));
+        if (charId != null) return own.find(c => String(c.id) === String(charId)) || null;
+        const onMap = new Set((this.state.tokens || []).filter(t => t.kind === 'character').map(t => String(t.sourceId)));
+        return own.find(c => onMap.has(String(c.id))) || own[0] || null;
+    }
+
+    /** Повторный бросок стоит одно вдохновение. */
+    spendInspiration(c) {
+        const n = Math.max(0, Math.trunc(Number(c?.inspiration)) || 0);
+        if (n <= 0) return false;
+        c.inspiration = n - 1;
+        return true;
+    }
+
+    rollForRequest(requestId, playerId, playerName, charId, mod) {
+        const req = this.rollRequests().find(r => String(r.id) === String(requestId));
+        if (!req || !req.open) return { ok: false, error: 'Мастер уже закрыл этот бросок' };
+        if (req.targets !== 'all' && !req.targets.includes(String(playerId))) return { ok: false, error: 'Этот бросок просили не у вас' };
+        const c = this.playerCharacter(playerId, charId);
+        const prev = req.results[playerId];
+        let reroll = false;
+        if (prev) {
+            if (!c || !this.spendInspiration(c)) return { ok: false, error: 'Бросок уже сделан. Перебросить можно за вдохновение — его нет' };
+            reroll = true;
+        }
+        const m = Math.max(-10, Math.min(20, Math.trunc(Number(mod)) || 0));
+        const die = 1 + Math.floor(Math.random() * req.sides);
+        const total = die + m;
+        const entry = { die, mod: m, total, at: Date.now() };
+        const res = prev || { name: playerName, charName: c?.name || null, rolls: [] };
+        res.rolls.push(entry);
+        res.total = total;
+        req.results[playerId] = res;
+        const success = req.dc ? total >= req.dc : null;
+        this.version++;
+        this.markDirty();
+        const who = c?.name || playerName;
+        const sign = m ? (m > 0 ? ` + ${m}` : ` − ${-m}`) : '';
+        return {
+            ok: true, reroll,
+            roll: {
+                sides: req.sides, mainRolls: [die], fixed: m, modifierStr: m ? (m > 0 ? '+' + m : String(m)) : '', total,
+                isCrit: req.sides === 20 && die === 20, isFail: req.sides === 20 && die === 1,
+                title: `🎲 ${who}: ${req.label}${reroll ? ' — переброс ✨' : ''}`,
+                detail: `d${req.sides} = ${die}${sign}` + (req.dc && req.showDc ? ` · КС ${req.dc}: ${success ? 'успех' : 'провал'}` : '') +
+                    (reroll ? ` · осталось вдохновения: ${c.inspiration}` : '')
+            }
+        };
+    }
+
+    /** Атака игрока: в свой ход в бою — один раз каждой рукой; повтор — за вдохновение. */
+    playerAttack(playerId, charId, slot) {
+        const c = this.playerCharacter(playerId, charId);
+        if (!c) return { ok: false, error: 'Персонаж не найден' };
+        const init = Array.isArray(this.state.initiative) ? this.state.initiative : [];
+        const cur = init[Number(this.state.initIndex) || 0];
+        const token = cur && (this.state.tokens || []).find(t => String(t.id) === String(cur.tokenId));
+        if (!init.length) return { ok: false, error: 'Атаковать можно в бою, в свой ход. Вне боя мастер запросит бросок' };
+        if (!token || token.kind !== 'character' || String(token.sourceId) !== String(c.id)) return { ok: false, error: 'Сейчас не ваш ход' };
+        const key = `${Number(this.state.initRound) || 1}:${Number(this.state.initIndex) || 0}:${slot}`;
+        const used = this.state.attacksUsed && typeof this.state.attacksUsed === 'object' ? this.state.attacksUsed : (this.state.attacksUsed = {});
+        let reroll = false;
+        if (used[`${c.id}`] === key) {
+            if (!this.spendInspiration(c)) return { ok: false, error: 'Этой рукой вы уже атаковали в этот ход. Повторить можно за вдохновение — его нет' };
+            reroll = true;
+        }
+        const r = Items.rollAttack(c, slot, this.state.initRound);
+        if (!r) return { ok: false, error: 'Нет такой атаки' };
+        used[`${c.id}`] = key;
+        this.version++;
+        this.markDirty();
+        const signed = n => (n >= 0 ? '+' + n : String(n));
+        return {
+            ok: true, reroll, log: `⚔ ${c.name} — ${r.name}: атака ${r.total} (d20=${r.d20})${r.fail ? ', промах' : `, урон ${r.damage}`}${r.crit ? ' 🌟 КРИТ' : ''}${reroll ? ' — переброс ✨' : ''}`,
+            roll: {
+                sides: 20, mainRolls: [r.d20], fixed: r.toHit, modifierStr: signed(r.toHit), total: r.total,
+                isCrit: r.crit, isFail: r.fail, title: `⚔ ${c.name}: ${r.name}${reroll ? ' — переброс ✨' : ''}`,
+                detail: r.detail + (reroll ? ` · осталось вдохновения: ${c.inspiration}` : '')
+            }
+        };
+    }
+
+    pushLog(message, type = 'dice') {
+        const entry = { id: Date.now() + Math.random(), type, message, data: null, timestamp: Date.now() };
+        this.state.eventLog = Array.isArray(this.state.eventLog) ? this.state.eventLog : [];
+        this.state.eventLog.unshift(entry);
+        if (this.state.eventLog.length > 500) this.state.eventLog.length = 500;
+        this.actionHistory.push({ version: this.version, addedTokens: [], removedTokenIds: [], logEntry: entry });
     }
 
     addDiceRoll(entry) {
@@ -623,6 +755,10 @@ export function stateForPlayer(state, playerId, vision = null) {
         return copy;
     });
     s.eventLog = (Array.isArray(state.eventLog) ? state.eventLog : []).filter(e => !(e && e.data && e.data.gm));
+    s.rollRequests = (Array.isArray(state.rollRequests) ? state.rollRequests : [])
+        .filter(r => r.targets === 'all' || (Array.isArray(r.targets) && r.targets.includes(String(playerId))))
+        .map(r => (r.dc && !r.showDc ? { ...r, dc: null } : r));
+    delete s.attacksUsed;
     return s;
 }
 
@@ -719,6 +855,7 @@ export function mergePlayerPatch(currentState, patch, playerId, limitMove = null
         c.coins = Inv.normCoins(null);
         c.equipment = {};
         c.effects = [];
+        c.inspiration = 0;
         idMap.set(String(raw.id), c.id);
         return c;
     });

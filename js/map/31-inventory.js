@@ -261,6 +261,10 @@ function renderCharacterSheet(box) {
           <div class="sheet-big"><div class="sheet-big-val">${c.hpCur}<small>/${c.hpMax}</small></div><div class="sheet-big-label">Хиты</div>
             <div class="hp-bar"><div class="hp-fill ${hpPct < 25 ? 'low' : hpPct < 50 ? 'mid' : ''}" style="width:${hpPct}%"></div></div></div>
           <div class="sheet-big"><div class="sheet-big-val">${String(st.speed).replace('.', ',')}<small> м</small></div><div class="sheet-big-label">Скорость</div></div>
+          <div class="sheet-big sheet-insp" title="Вдохновение: перебросить кубик по запросу мастера или атаку. Выдаёт мастер; даёт запертый или древний сундук">
+            <div class="sheet-big-val">✨${Number(c.inspiration) || 0}</div><div class="sheet-big-label">Вдохновение</div>
+            ${invIsMaster() ? `<div class="sheet-insp-btns"><button onclick="${H(() => giveInspiration(c.id, -1))}">−</button><button onclick="${H(() => giveInspiration(c.id, 1))}">+</button></div>` : ''}
+          </div>
         </div>
         <div class="sheet-abilities">${abilities}</div>
         <div class="sheet-line">${st.saves ? `Спасброски ${signed(st.saves)} · ` : ''}${st.spell ? `Заклинания ${signed(st.spell)} к атаке и КС · ` : ''}${escapeHtml(st.acNote)}</div>
@@ -302,7 +306,7 @@ function invUseItem(ref, itemId) {
     const detail = u.kind === 'heal'
       ? `Лечение ${u.dice} → [${roll.rolls.join(', ')}]${roll.mod ? (roll.mod > 0 ? ' + ' : ' − ') + Math.abs(roll.mod) : ''}`
       : `Урон ${u.type}: ${u.dice} → [${roll.rolls.join(', ')}]${roll.mod ? (roll.mod > 0 ? ' + ' : ' − ') + Math.abs(roll.mod) : ''}${u.save ? ' · ' + u.save : ''}`;
-    announceRoll({ sides: ItemsCore.parseDice(u.dice)?.sides || 6, total: roll.total, mainRolls: roll.rolls, title: label, detail });
+    announceRoll({ sides: ItemsCore.parseDice(u.dice)?.sides || 6, total: roll.total, mainRolls: roll.rolls, title: label, detail, fromItem: true });
   }
 }
 
@@ -310,23 +314,19 @@ function invUseItem(ref, itemId) {
 function rollCharacterAttack(charId, slot) {
   const c = state.characters.find(x => x.id === charId);
   if (!c) return;
-  const at = ItemsCore.stats(c, state.initRound).attacks.find(a => a.slot === slot);
-  if (!at) return;
-  const d20 = 1 + Math.floor(Math.random() * 20);
-  const crit = d20 === 20, fail = d20 === 1;
-  const dmgRoll = ItemsCore.rollDice(at.dice, crit);
-  const extras = at.extras.map(x => ({ ...x, r: ItemsCore.rollDice(x.dice, crit) }));
-  const dmg = Math.max(1, dmgRoll.total + at.dmgMod) + extras.reduce((s, x) => s + x.r.total, 0);
+  // Игрок в комнате: кубики бросает сервер — один раз в свой ход, повтор за вдохновение
+  if (isPlayerRole()) {
+    if (!window.DND_ONLINE?.sendAttack?.(charId, slot)) toast('Нет связи с сервером', 'error');
+    return;
+  }
+  const r = ItemsCore.rollAttack(c, slot, state.initRound);
+  if (!r) return;
   const signed = n => (n >= 0 ? '+' + n : String(n));
-  const parts = [`${at.dice}${crit ? '×2' : ''} [${dmgRoll.rolls.join(', ') || at.dice}]${at.dmgMod ? ' ' + signed(at.dmgMod) : ''} ${at.type}`,
-    ...extras.map(x => `${x.dice}${crit ? '×2' : ''} [${x.r.rolls.join(', ')}] ${x.type}`)];
   announceRoll({
-    sides: 20, total: d20 + at.toHit, mainRolls: [d20], fixed: at.toHit, modifierStr: signed(at.toHit),
-    isCrit: crit, isFail: fail,
-    title: `⚔ ${c.name}: ${at.name}`,
-    detail: fail ? 'Промах (выпала 1)' : `Урон: ${dmg}${crit ? ' — КРИТ!' : ''} · ${parts.join(' + ')}`
+    sides: 20, total: r.total, mainRolls: [r.d20], fixed: r.toHit, modifierStr: signed(r.toHit),
+    isCrit: r.crit, isFail: r.fail, title: `⚔ ${c.name}: ${r.name}`, detail: r.detail
   });
-  logEvent('combat', `⚔ ${c.name} — ${at.name}: атака ${d20 + at.toHit} (d20=${d20})${fail ? ', промах' : `, урон ${dmg}`}${crit ? ' 🌟 КРИТ' : ''}`);
+  logEvent('combat', `⚔ ${c.name} — ${r.name}: атака ${r.total} (d20=${r.d20})${r.fail ? ', промах' : `, урон ${r.damage}`}${r.crit ? ' 🌟 КРИТ' : ''}`);
 }
 
 /** Показать результат у себя и у всех в комнате, записать в историю бросков. */
@@ -334,7 +334,7 @@ function announceRoll(r) {
   const result = {
     sides: r.sides, mainRolls: r.mainRolls || [], mainTotal: (r.mainRolls || []).reduce((s, x) => s + x, 0),
     extraDiceResults: [], fixed: r.fixed || 0, modifierStr: r.modifierStr || '', total: r.total,
-    isCrit: !!r.isCrit, isFail: !!r.isFail, title: r.title, detail: r.detail
+    isCrit: !!r.isCrit, isFail: !!r.isFail, title: r.title, detail: r.detail, fromItem: !!r.fromItem
   };
   showDiceResult(result);
   state.diceHistory.unshift({ time: Date.now(), sides: result.sides, modStr: result.modifierStr, total: result.total, isCrit: result.isCrit, isFail: result.isFail, title: r.title });
@@ -704,9 +704,13 @@ function rollChestContents(poolKey) {
 function openLootChestForToken(tokenId) {
   const token = state.tokens.find(t => t.id === tokenId);
   if (!token || !token.isLootChest) return;
+  const opener = isPlayerRole() ? myTokenOnMap() : null;
+  const who = opener ? { kind: 'character', id: opener.sourceId } : null;
   if (!Array.isArray(token.contents)) {
     const lib = getLootItem(token.lootId);
-    if (!invAction({ type: 'chest_fill', tokenId, contents: rollChestContents(token.lootPool || lib?.lootPool) })) return;
+    if (!invAction({ type: 'chest_fill', tokenId, contents: rollChestContents(token.lootPool || lib?.lootPool), who })) return;
+  } else if (who && !token.inspirationGiven && ['chest_locked', 'chest_ancient'].includes(token.lootId)) {
+    invAction({ type: 'chest_open', tokenId, who });
   }
   invUI.main = { view: 'chest', tokenId };
   renderInvChest(tokenId);

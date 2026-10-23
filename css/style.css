@@ -702,3 +702,72 @@ body:not(.role-player) .player-only, body:not(.role-player) .player-only-inline 
 .inv-custom-mech { display: flex; flex-direction: column; gap: 8px; }
 .inv-checks { display: flex; flex-wrap: wrap; gap: 10px; }
 .inv-form label.inv-check { flex-direction: row; align-items: center; gap: 5px; font-size: 12px; color: var(--text-1); }
+
+/* ===== Запросы бросков ===== */
+.roll-requests { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; max-height: 45vh; overflow-y: auto; flex-shrink: 0; }
+.rr-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-2); }
+.rr-empty, .rr-idle { font-size: 11px; color: var(--text-2); line-height: 1.4; }
+.rr-card { padding: 9px 10px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; gap: 6px; }
+.rr-card.rr-pending { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); animation: rr-pulse 1.6s ease-in-out infinite; }
+@keyframes rr-pulse { 50% { box-shadow: 0 0 0 6px rgba(212,165,116,0.05); } }
+.rr-card-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--text-0); }
+.rr-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-1); padding: 2px 0; }
+.rr-row.wait { color: var(--text-3); font-style: italic; }
+.rr-row.ok b { color: var(--success); } .rr-row.bad b { color: var(--danger); }
+.rr-row small { color: var(--info); }
+.rr-ask { font-size: 13px; color: var(--text-0); }
+.rr-sub { font-size: 11px; color: var(--text-2); }
+.rr-mod { display: flex; gap: 6px; align-items: center; }
+.rr-mod .rr-ab { flex: 1; padding: 5px 24px 5px 6px; font-size: 11px; }
+.rr-mod label { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--text-2); }
+.rr-mod label .input { width: 52px; padding: 5px 4px; text-align: center; }
+.rr-roll { width: 100%; }
+.rr-result { font-size: 13px; color: var(--text-1); }
+.rr-result b { font-family: 'Cormorant Garamond', serif; font-size: 24px; color: var(--text-0); }
+.rr-ok { color: var(--success); font-weight: 600; } .rr-bad { color: var(--danger); font-weight: 600; }
+.rr-reroll { width: 100%; border-color: rgba(123,163,201,0.6); }
+.rq-targets { display: flex; flex-direction: column; gap: 4px; padding-left: 4px; }
+.sheet-top { grid-template-columns: repeat(4, 1fr) !important; }
+.sheet-insp { position: relative; }
+.sheet-insp-btns { display: flex; gap: 4px; justify-content: center; margin-top: 2px; }
+.sheet-insp-btns button { width: 22px; height: 18px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--bg-1); color: var(--text-0); cursor: pointer; line-height: 1; font-family: inherit; }
+
+/* ===== Компактная раскладка: верхняя и левая панели помещаются при 100% ===== */
+:root { --sidebar-left-width: 248px; --sidebar-right-width: 320px; }
+.app { grid-template-rows: 46px 1fr; }
+.topbar { gap: 8px !important; padding: 0 10px !important; overflow: hidden; }
+.topbar .btn-sm { padding: 5px 9px; }
+.logo { gap: 8px; }
+.logo-mark { width: 26px !important; height: 26px !important; }
+.dice-group { gap: 2px; padding: 3px; }
+.dice-btn { padding: 3px 6px; }
+.dice-mod-input { width: 46px; }
+
+.file-menu-wrap { position: relative; }
+.file-menu { display: none; position: fixed; z-index: 10000; min-width: 200px; padding: 6px; background: var(--bg-1); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 16px 40px rgba(0,0,0,.5); flex-direction: column; gap: 2px; }
+.file-menu.open { display: flex; }
+.file-menu button { text-align: left; background: transparent; border: 1px solid transparent; color: var(--text-0); padding: 7px 10px; border-radius: 7px; cursor: pointer; font-family: inherit; font-size: 13px; }
+.file-menu button:hover { background: var(--bg-3); }
+
+@media (max-width: 1700px) { .topbar-status { display: none; } .topbar-status + .inv-btn { margin-left: 0; } }
+@media (max-width: 1500px) { .logo-text { display: none; } .dice-mod-label { display: none; } }
+@media (max-width: 1250px) { .tb-label { display: none; } }
+@media (max-width: 1200px) { :root { --sidebar-right-width: 290px; --sidebar-left-width: 228px; } .dice-btn[data-dice="100"] { display: none; } }
+
+/* Разделы левой панели */
+.sidebar-left .section-title { padding: 9px 14px 5px; }
+.section-title.collapsible { cursor: pointer; user-select: none; justify-content: flex-start; gap: 6px; }
+.section-title.collapsible > :last-child:is(button, .icon-btn) { margin-left: auto; }
+.section-title.collapsible .vision-badge { margin-left: 4px; }
+.section-title.collapsible:hover { color: var(--text-0); }
+.section-caret { display: inline-block; font-size: 9px; transition: transform .15s; color: var(--text-3); }
+.section.collapsed .section-caret { transform: rotate(-90deg); }
+.section.collapsed > :not(.section-title) { display: none !important; }
+.section.collapsed { flex: 0 0 auto !important; }
+.sidebar-left .tool-list { padding: 0 8px 8px; }
+.sidebar-left .tool-list.tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+.tool-grid .tool-item { padding: 6px 7px; gap: 7px; font-size: 12px; min-width: 0; }
+.tool-grid .tool-item .tool-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tool-grid .tool-item .tool-key { display: none; }
+.tool-grid .tool-item[data-tool="grid"] .tool-key { display: inline; padding: 0 3px; font-size: 9px; }
+#vision-panel .tool-item { padding: 6px 8px; }

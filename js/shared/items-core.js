@@ -414,7 +414,25 @@
     };
   }
 
+  /** Бросок атаки оружием: d20 + бонус, урон (на 20 кости урона удваиваются). Возвращает данные для показа. */
+  function rollAttack(character, slot, round) {
+    const at = stats(character, round).attacks.find(a => a.slot === slot);
+    if (!at) return null;
+    const d20 = 1 + Math.floor(Math.random() * 20);
+    const crit = d20 === 20, fail = d20 === 1;
+    const main = rollDice(at.dice, crit);
+    const extras = at.extras.map(x => ({ ...x, r: rollDice(x.dice, crit) }));
+    const damage = Math.max(1, main.total + at.dmgMod) + extras.reduce((s, x) => s + x.r.total, 0);
+    const parts = [`${at.dice}${crit ? '×2' : ''} [${main.rolls.join(', ') || at.dice}]${at.dmgMod ? ' ' + signed(at.dmgMod) : ''} ${at.type}`,
+      ...extras.map(x => `${x.dice}${crit ? '×2' : ''} [${x.r.rolls.join(', ')}] ${x.type}`)];
+    return {
+      name: at.name, d20, toHit: at.toHit, total: d20 + at.toHit, crit, fail, damage,
+      detail: fail ? 'Промах (выпала 1)' : `Урон: ${damage}${crit ? ' — КРИТ!' : ''} · ${parts.join(' + ')}`
+    };
+  }
+
   const api = {
+    rollAttack,
     SLOTS, SLOT_IDS, ABILITIES, PROPS, CATEGORIES, CATALOG, POOLS,
     byId: id => BY_ID.get(id) || null, defOf, describe, planEquip, stats, activeEffects,
     parseDice, diceMin, diceMax, rollDice, abilityMod, profBonus, isTwoHanded,
