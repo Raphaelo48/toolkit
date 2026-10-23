@@ -168,7 +168,7 @@ function renderInfoPanel() {
         <div style="display:flex; gap:6px;">
           <button class="btn btn-sm" style="flex:1;background:var(--bg-3);" onclick="openInventoryModal(${token.id})">
             <svg style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8h14M5 8a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v.01a2 2 0 01-2 2M5 8l1 12a2 2 0 002 2h8a2 2 0 002-2L19 8"/></svg>
-            🎒 Инвентарь (${InventoryCore.countItems(InventoryCore.resolve(state, { kind: 'token', id: token.id })?.holder)})
+            ${token.kind === 'character' ? '📜 Лист и снаряжение' : '🎒 Инвентарь'} (${InventoryCore.countItems(InventoryCore.resolve(state, { kind: 'token', id: token.id })?.holder)})
           </button>
         </div>
       ` : ''}

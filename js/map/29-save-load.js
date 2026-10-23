@@ -28,6 +28,8 @@ function buildSaveData() {
     party: state.party || {},
     vision: state.vision || {},
     visionWalls: window.visionSaveData?.() || null,
+    boards: state.boards || [],
+    boardImages: window.boardsSaveData?.() || {},
   };
 }
 
@@ -58,6 +60,8 @@ function applySaveData(data) {
   InventoryCore.migrate(state);
   state.vision = (data.vision && typeof data.vision === 'object') ? data.vision : {};
   window.visionLoadData?.(data.visionWalls || null);
+  state.boards = Array.isArray(data.boards) ? data.boards : [];
+  window.boardsLoadData?.(data.boardImages || {});
   state.selectedTokenId = null;
 
   document.getElementById('app').classList.toggle('sidebar-left-collapsed', state.sidebarLeftCollapsed);

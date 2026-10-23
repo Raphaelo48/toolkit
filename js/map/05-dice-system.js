@@ -123,7 +123,9 @@ function showDiceResult(result) {
     } else {
       label.textContent = `d${result.sides}${result.modifierStr ? ' (' + result.modifierStr + ')' : ''}`;
     }
-    breakdown.innerHTML = formatRollResult(result);
+    // Атаки, зелья, свитки: подпись и подробности (урон и т.п.)
+    if (result.title) label.textContent = (result.isCrit ? '🌟 ' : result.isFail ? '💀 ' : '') + result.title;
+    breakdown.innerHTML = formatRollResult(result) + (result.detail ? `<div class="dice-result-detail">${escapeHtml(result.detail)}</div>` : '');
     if (state.diceHistory.length > 0) {
       historyList.innerHTML = state.diceHistory.slice(1, 11).map(h => {
         const time = new Date(h.time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });

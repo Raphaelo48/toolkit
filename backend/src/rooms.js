@@ -10,12 +10,15 @@ import { fileURLToPath } from 'url';
 import { store } from './store/index.js';
 
 // Общие с браузером модули (js/shared): правила инвентаря и расчёт обзора
+// Все общие модули работают в одном контексте: правила инвентаря пользуются каталогом предметов
+const sharedContext = vm.createContext({ btoa, atob, Math, Uint8Array, Uint32Array, String, JSON, Date, Number, Array, Object, Map, Set });
 function loadShared(name) {
     const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'js', 'shared', name);
-    const sandbox = { module: { exports: {} }, btoa, atob, Math, Uint8Array, Uint32Array, String };
-    vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: file });
-    return sandbox.module.exports;
+    sharedContext.module = { exports: {} };
+    vm.runInContext(fs.readFileSync(file, 'utf8'), sharedContext, { filename: file });
+    return sharedContext.module.exports;
 }
+const Items = loadShared('items-core.js');
 const Inv = loadShared('inventory-core.js');
 const Vision = loadShared('vision-core.js');
 const MAX_VISION_CELLS = 2_000_000;
@@ -31,7 +34,7 @@ const GM_ONLY_TOKEN_KINDS = new Set(['hidden', 'trap']);
 // Эти поля персонажа меняет только мастер
 const MASTER_ONLY_CHARACTER_FIELDS = ['xp', 'level', 'hpMax', 'visionRadius'];
 // Эти поля меняются только действиями инвентаря на сервере — никакой снимок их не перезапишет
-const SERVER_OWNED_CHARACTER_FIELDS = ['inventory', 'coins'];
+const SERVER_OWNED_CHARACTER_FIELDS = ['inventory', 'coins', 'equipment', 'effects'];
 const SERVER_OWNED_TOKEN_FIELDS = ['inventory', 'coins', 'contents', 'item', 'qty'];
 const ACTION_HISTORY_LIMIT = 300;
 
@@ -49,6 +52,7 @@ class Room {
         this.actionHistory = [];              // { version, addedTokens, removedTokenIds, logEntry } — для слияния со старыми снимками
         this.masterId = null;
         this.walls = null;                    // { w, h, cell, data, mask } — стены для обзора
+        this.boards = {};                     // id холста → картинка (data URL); список холстов — в state.boards
         this.explored = new Map();            // группа обзора → Uint8Array «уже видели»
         this.vision = null;                   // последний расчёт: группа → { visible, explored }
         this.queue = Promise.resolve();
@@ -83,7 +87,8 @@ class Room {
                 state: { ...this.state, _visionMemory: this.walls ? { w: this.walls.w, h: this.walls.h, groups: memory } : undefined },
                 version: this.version, map_src: this.mapSrc,
                 draw_canvas: this.canvases.draw, fog_canvas: this.canvases.fog,
-                vision_walls: this.walls ? JSON.stringify({ w: this.walls.w, h: this.walls.h, cell: this.walls.cell, data: this.walls.data }) : null
+                vision_walls: this.walls ? JSON.stringify({ w: this.walls.w, h: this.walls.h, cell: this.walls.cell, data: this.walls.data }) : null,
+                boards: Object.keys(this.boards).length ? JSON.stringify(this.boards) : null
             });
         } catch (err) {
             this.dirty = true; // попробуем ещё раз
@@ -325,6 +330,19 @@ class Room {
         this.send(ws, msg);
     }
 
+    /** Картинка холста для просмотра (null — удалить). */
+    setBoardImage(id, src) {
+        const key = String(id || '').slice(0, 40);
+        if (!key) return false;
+        if (src) this.boards[key] = src; else delete this.boards[key];
+        this.markDirty();
+        return true;
+    }
+
+    sendBoards(ws) {
+        for (const [id, src] of Object.entries(this.boards)) this.send(ws, { type: 'board_image', id, src });
+    }
+
     sendWalls(ws) {
         this.send(ws, this.walls
             ? { type: 'vision_walls', w: this.walls.w, h: this.walls.h, cell: this.walls.cell, data: this.walls.data }
@@ -440,6 +458,7 @@ export async function getRoom(roomId) {
             if (row.vision_walls) {
                 try { room.setWalls(JSON.parse(row.vision_walls)); room.dirty = false; } catch (err) { console.warn(`[room ${id}] walls:`, err.message); }
             }
+            if (row.boards) { try { room.boards = JSON.parse(row.boards) || {}; } catch { room.boards = {}; } }
             const memory = room.state._visionMemory;
             delete room.state._visionMemory;
             if (memory && room.walls && memory.w === room.walls.w && memory.h === room.walls.h) {
@@ -529,7 +548,9 @@ function keepServerOwned(next, current) {
 function moveToParty(state, holder) {
     const party = Inv.ensureParty(state);
     let moved = false;
-    for (const item of Array.isArray(holder.inventory) ? holder.inventory : []) {
+    const equipped = holder.equipment && typeof holder.equipment === 'object' ? Object.values(holder.equipment) : [];
+    for (const item of [...(Array.isArray(holder.inventory) ? holder.inventory : []), ...equipped]) {
+        if (!item) continue;
         const existing = item.custom ? null : party.inventory.find(e => e.id === item.id && !e.custom);
         if (existing) existing.qty += Number(item.qty) || 1; else party.inventory.push(clone(item));
         moved = true;
@@ -696,6 +717,8 @@ export function mergePlayerPatch(currentState, patch, playerId, limitMove = null
         // Новый персонаж начинает с пустыми карманами: вещи выдаются только действиями
         c.inventory = [];
         c.coins = Inv.normCoins(null);
+        c.equipment = {};
+        c.effects = [];
         idMap.set(String(raw.id), c.id);
         return c;
     });

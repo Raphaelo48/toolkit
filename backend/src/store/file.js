@@ -157,9 +157,9 @@ export function createFileStore(dataDir) {
             const result = {
                 state: saved.state || {}, version: saved.version || 0,
                 map_src: await read('map.txt'), draw_canvas: await read('draw.txt'), fog_canvas: await read('fog.txt'),
-                vision_walls: await read('walls.txt')
+                vision_walls: await read('walls.txt'), boards: await read('boards.txt')
             };
-            lastSaved.set(String(roomId), { map: result.map_src, draw: result.draw_canvas, fog: result.fog_canvas, walls: result.vision_walls });
+            lastSaved.set(String(roomId), { map: result.map_src, draw: result.draw_canvas, fog: result.fog_canvas, walls: result.vision_walls, boards: result.boards });
             return result;
         },
 
@@ -178,6 +178,7 @@ export function createFileStore(dataDir) {
             await writeBlob('draw.txt', 'draw', s.draw_canvas || null);
             await writeBlob('fog.txt', 'fog', s.fog_canvas || null);
             await writeBlob('walls.txt', 'walls', s.vision_walls || null);
+            await writeBlob('boards.txt', 'boards', s.boards || null);
             await writeAtomic(path.join(dir, 'state.json'), JSON.stringify({ version: s.version, state: s.state }));
             lastSaved.set(id, prev);
         }

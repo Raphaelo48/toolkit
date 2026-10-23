@@ -151,7 +151,8 @@ window.dndVisionOnDrag = function (token) {
   VIS.dragPreview = visionCompute([token]);
   visionRender();
 };
-window.addEventListener('mouseup', () => { if (VIS.dragPreview) { VIS.dragPreview = null; visionRender(); } });
+window.dndVisionEndDrag = () => { if (VIS.dragPreview) { VIS.dragPreview = null; visionRender(); } };
+window.addEventListener('mouseup', window.dndVisionEndDrag);
 
 /* ───────── данные из сети ───────── */
 

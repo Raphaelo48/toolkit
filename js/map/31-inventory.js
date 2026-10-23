@@ -103,19 +103,37 @@ function invCoinsHtml(coins) {
 }
 
 function invItemHtml(entry, actions) {
+  const desc = entry.coins ? '' : (ItemsCore.defOf(entry) ? ItemsCore.describe(entry) : entry.desc);
   return `
     <div class="inv-item rarity-${escapeHtml(entry.rarity || 'common')}">
       <div class="inv-item-icon">${escapeHtml(entry.icon || '❓')}</div>
       <div class="inv-item-info">
-        <div class="inv-item-name">${escapeHtml(entry.name)}${entry.qty > 1 ? ` <span class="inv-qty">×${entry.qty}</span>` : ''}</div>
+        <div class="inv-item-name">${escapeHtml(entry.name)}${entry.qty > 1 ? ` <span class="inv-qty">×${entry.qty}</span>` : ''}${entry.charges != null ? ` <span class="inv-charges">⚡${entry.charges}</span>` : ''}</div>
         <div class="inv-item-meta">
           ${entry.coins ? '' : `<span class="rarity-label-${escapeHtml(entry.rarity || 'common')}">${INV_RARITY[entry.rarity] || ''}</span>`}
           ${entry.custom ? ' · свой предмет' : ''}
         </div>
-        ${entry.desc ? `<div class="inv-item-desc">${escapeHtml(entry.desc)}</div>` : ''}
+        ${desc ? `<div class="inv-item-desc">${escapeHtml(desc)}</div>` : ''}
       </div>
       ${actions ? `<div class="inv-item-actions">${actions}</div>` : ''}
     </div>`;
+}
+
+/** Кнопки предмета в рюкзаке: надеть / использовать / передать / на карту / удалить. */
+function invItemActions(box, e) {
+  if (!invCanManage(box)) return '';
+  const ref0 = box.ref;
+  const def = ItemsCore.defOf(e);
+  const isChar = box.kind === 'character';
+  const btn = (label, title, fn, cls = '') => `<button class="btn btn-sm ${cls}" title="${title}" onclick="${H(fn)}">${label}</button>`;
+  let out = '';
+  if (isChar && def?.slot) out += btn('Надеть', 'Надеть или взять в руку', () => invEquip(ref0, e.id), 'btn-primary');
+  if (isChar && def?.use) out += btn('Исп.', 'Использовать', () => invUseItem(ref0, e.id), 'btn-primary');
+  if (!def?.slot && !def?.use) out += btn('Исп.', 'Израсходовать одну штуку', () => invUse(ref0, e.id));
+  out += btn('Передать', 'Передать', () => invPickTransfer(ref0, e.id));
+  out += btn('На карту', 'Выбросить на карту', () => invDrop(ref0, e.id));
+  if (invIsMaster()) out += btn('✕', 'Удалить совсем', () => invDelete(ref0, e.id), 'btn-danger');
+  return out;
 }
 
 /* ───────── инвентарь персонажа / монстра / склада ───────── */
@@ -130,24 +148,26 @@ function openInventory(ref) {
 // Старое имя — для кнопок в панели информации
 function openInventoryModal(tokenId) { openInventory({ kind: 'token', id: tokenId }); }
 
+function invFooter(ref0) {
+  return `
+    <div class="modal-footer inv-footer">
+      ${invIsMaster() ? `
+        <button class="btn btn-primary" onclick="${H(() => invOpenItemPicker(ref0))}">+ Из списка</button>
+        <button class="btn" onclick="${H(() => invOpenCustomItem(ref0))}">+ Свой предмет</button>` : ''}
+      <button class="btn" onclick="openInventoryOverview()">Все инвентари</button>
+      <button class="btn" style="margin-left:auto" onclick="closeInvDialog('inv-main')">Закрыть</button>
+    </div>`;
+}
+
 function renderInvBox(ref) {
   const box = invBox(ref);
   if (!box) return;
+  if (box.kind === 'character') { renderCharacterSheet(box); return; }
   const manage = invCanManage(box);
-  const master = invIsMaster();
   const items = box.holder.inventory;
   const ref0 = box.ref;
-  const subtitle = box.kind === 'party' ? 'Общий запас группы' : box.kind === 'character' ? 'Персонаж' : 'Существо на карте';
-
-  const list = items.length ? items.map(e => {
-    const acts = manage ? `
-      <button class="btn btn-sm" title="Использовать одну штуку" onclick="${H(() => invUse(ref0, e.id))}">Исп.</button>
-      <button class="btn btn-sm" title="Передать" onclick="${H(() => invPickTransfer(ref0, e.id))}">Передать</button>
-      <button class="btn btn-sm" title="Выбросить на карту" onclick="${H(() => invDrop(ref0, e.id))}">На карту</button>
-      ${master ? `<button class="btn btn-sm btn-danger" title="Удалить совсем" onclick="${H(() => invDelete(ref0, e.id))}">✕</button>` : ''}` : '';
-    return invItemHtml(e, acts);
-  }).join('') : '<div class="inv-empty">Пусто</div>';
-
+  const subtitle = box.kind === 'party' ? 'Общий запас группы' : 'Существо на карте';
+  const list = items.length ? items.map(e => invItemHtml(e, invItemActions(box, e))).join('') : '<div class="inv-empty">Пусто</div>';
   setInvMain(`
     <div class="modal-title inv-title">
       <span>${escapeHtml(box.icon)} ${escapeHtml(box.name)}</span>
@@ -158,13 +178,168 @@ function renderInvBox(ref) {
       ${manage ? `<button class="btn btn-sm" onclick="${H(() => invOpenCoins(ref0))}">💰 Деньги…</button>` : ''}
     </div>
     <div class="modal-body inv-list">${list}</div>
-    <div class="modal-footer inv-footer">
-      ${master ? `
-        <button class="btn btn-primary" onclick="${H(() => invOpenItemPicker(ref0))}">+ Из списка</button>
-        <button class="btn" onclick="${H(() => invOpenCustomItem(ref0))}">+ Свой предмет</button>` : ''}
-      <button class="btn" onclick="openInventoryOverview()">Все инвентари</button>
-      <button class="btn" style="margin-left:auto" onclick="closeInvDialog('inv-main')">Закрыть</button>
-    </div>`);
+    ${invFooter(ref0)}`);
+}
+
+/* ───────── лист персонажа: снаряжение, характеристики, атаки ───────── */
+
+const SHEET_LAYOUT = [
+  ['head', 'neck', 'cloak'],
+  ['mainhand', 'chest', 'offhand'],
+  ['hands', 'legs', 'feet'],
+  ['ring1', null, 'ring2'],
+];
+
+function renderCharacterSheet(box) {
+  const c = box.character;
+  const ref0 = box.ref;
+  const manage = invCanManage(box);
+  const st = ItemsCore.stats(c, state.initRound);
+  const eq = c.equipment || {};
+  const slotInfo = Object.fromEntries(ItemsCore.SLOTS.map(x => [x.id, x]));
+  const twoHanded = ItemsCore.isTwoHanded(ItemsCore.defOf(eq.mainhand));
+  const signed = n => (n >= 0 ? '+' + n : String(n));
+
+  const slotHtml = id => {
+    if (!id) return '<div class="sheet-slot sheet-slot-blank"></div>';
+    const info = slotInfo[id];
+    const item = eq[id];
+    const blockedByTwo = id === 'offhand' && !item && twoHanded;
+    if (!item) {
+      return `<div class="sheet-slot empty ${blockedByTwo ? 'blocked' : ''}" title="${info.label}${blockedByTwo ? ': занято двуручным оружием' : ''}">
+        <span class="sheet-slot-icon">${blockedByTwo ? '🔒' : info.icon}</span><span class="sheet-slot-label">${info.label}</span></div>`;
+    }
+    return `<div class="sheet-slot filled rarity-${escapeHtml(item.rarity || 'common')}" title="${escapeHtml(item.name + ' — ' + ItemsCore.describe(item))}">
+      <span class="sheet-slot-icon">${escapeHtml(item.icon || '❓')}</span>
+      <span class="sheet-slot-name">${escapeHtml(item.name)}</span>
+      ${manage ? `<button class="sheet-slot-off" title="Снять" onclick="${H(() => invAction({ type: 'unequip', who: ref0, slot: id }))}">снять</button>` : ''}
+    </div>`;
+  };
+
+  const abilities = ItemsCore.ABILITIES.map(a => `
+    <div class="sheet-ability" title="${a.name}">
+      <div class="sheet-ability-label">${a.label}</div>
+      <div class="sheet-ability-mod">${signed(st.abilityMods[a.id])}</div>
+      <div class="sheet-ability-score ${st.abilities[a.id] !== (Number(c.abilities?.[a.id]) || 10) ? 'boosted' : ''}">${st.abilities[a.id]}</div>
+    </div>`).join('');
+
+  const attacks = st.attacks.map(at => {
+    const dmg = `${at.dice}${at.dmgMod ? signed(at.dmgMod) : ''} ${at.type}` + at.extras.map(x => ` + ${x.dice} ${x.type}`).join('');
+    return `<div class="sheet-attack">
+      <span class="sheet-attack-icon">${escapeHtml(at.icon)}</span>
+      <div class="sheet-attack-info">
+        <div class="sheet-attack-name">${escapeHtml(at.name)}${at.note ? ` <small>(${at.note})</small>` : ''}</div>
+        <div class="sheet-attack-meta">Атака ${signed(at.toHit)} · Урон ${escapeHtml(dmg)}${at.range ? ` · ${at.range}` : ''}</div>
+      </div>
+      ${manage ? `<button class="btn btn-sm btn-primary" title="Бросить атаку и урон — увидят все" onclick="${H(() => rollCharacterAttack(c.id, at.slot))}">🎲 Атака</button>` : ''}
+    </div>`;
+  }).join('');
+
+  const effects = st.effects.length ? st.effects.map(e => {
+    const left = e.untilRound != null ? `ещё ${Math.max(0, e.untilRound - (Number(state.initRound) || 1) + 1)} р.` : (e.duration || 'пока не снимут');
+    const mods = ItemsCore.describe({ id: '_', mech: { mods: e.mods } }).replace(/\.$/, '');
+    return `<span class="sheet-effect" title="${escapeHtml([mods, e.text].filter(x => x && x !== 'Без особых свойств').join('. '))}">
+      ${escapeHtml(e.icon || '✨')} ${escapeHtml(e.name)} <small>${left}</small>
+      ${manage ? `<button title="Снять эффект" onclick="${H(() => invAction({ type: 'effect_remove', who: ref0, effectId: e.id }))}">✕</button>` : ''}</span>`;
+  }).join('') : '<span class="sheet-muted">Нет</span>';
+
+  const bag = c.inventory.length ? c.inventory.map(e => invItemHtml(e, invItemActions(box, e))).join('') : '<div class="inv-empty">Рюкзак пуст</div>';
+  const hpPct = c.hpMax ? Math.round(100 * c.hpCur / c.hpMax) : 0;
+
+  setInvMain(`
+    <div class="modal-title inv-title">
+      <span>${escapeHtml(box.icon)} ${escapeHtml(c.name)}</span>
+      <span class="inv-subtitle">${escapeHtml(c.charClass || 'Персонаж')} · ур. ${c.level || 1} · бонус мастерства +${st.prof}</span>
+    </div>
+    <div class="sheet">
+      <div class="sheet-doll">
+        ${SHEET_LAYOUT.map(row => row.map(slotHtml).join('')).join('')}
+      </div>
+      <div class="sheet-stats">
+        <div class="sheet-top">
+          <div class="sheet-big" title="${escapeHtml(st.acNote)}"><div class="sheet-big-val">${st.ac}</div><div class="sheet-big-label">КД</div></div>
+          <div class="sheet-big"><div class="sheet-big-val">${c.hpCur}<small>/${c.hpMax}</small></div><div class="sheet-big-label">Хиты</div>
+            <div class="hp-bar"><div class="hp-fill ${hpPct < 25 ? 'low' : hpPct < 50 ? 'mid' : ''}" style="width:${hpPct}%"></div></div></div>
+          <div class="sheet-big"><div class="sheet-big-val">${String(st.speed).replace('.', ',')}<small> м</small></div><div class="sheet-big-label">Скорость</div></div>
+        </div>
+        <div class="sheet-abilities">${abilities}</div>
+        <div class="sheet-line">${st.saves ? `Спасброски ${signed(st.saves)} · ` : ''}${st.spell ? `Заклинания ${signed(st.spell)} к атаке и КС · ` : ''}${escapeHtml(st.acNote)}</div>
+        ${st.notes.length ? `<div class="sheet-warn">${st.notes.map(escapeHtml).join(' · ')}</div>` : ''}
+        <div class="inv-section-label">Атаки</div>
+        ${attacks}
+        <div class="inv-section-label">Эффекты</div>
+        <div class="sheet-effects">${effects}</div>
+      </div>
+    </div>
+    <div class="inv-coins-row" style="margin-top:12px">
+      <div class="inv-section-label" style="margin:0">Рюкзак · ${InventoryCore.countItems(c)} предм.</div>
+      <div class="inv-coins">${invCoinsHtml(c.coins)}${manage ? `<button class="btn btn-sm" onclick="${H(() => invOpenCoins(ref0))}">💰</button>` : ''}</div>
+    </div>
+    <div class="modal-body inv-list sheet-bag">${bag}</div>
+    ${invFooter(ref0)}`);
+  document.querySelector('#inv-main .modal')?.classList.add('inv-sheet');
+}
+
+/* ───────── надеть / использовать ───────── */
+
+function invEquip(ref, itemId) {
+  invAction({ type: 'equip', who: ref, itemId });
+}
+
+/** Использовать предмет: кости бросаются здесь, результат видят все. */
+function invUseItem(ref, itemId) {
+  const box = invBox(ref);
+  const item = box?.holder.inventory.find(e => e.id === itemId && (e.charges == null || e.charges > 0)) || box?.holder.inventory.find(e => e.id === itemId);
+  const def = ItemsCore.defOf(item);
+  const u = def?.use;
+  if (!u) return;
+  let roll = null;
+  if (u.kind === 'heal' || u.kind === 'spell') roll = ItemsCore.rollDice(u.dice);
+  const action = { type: 'use', who: ref, itemId, rolled: roll ? roll.total : undefined };
+  if (!invAction(action)) return;
+  if (roll) {
+    const label = u.kind === 'heal' ? `🧪 ${box.name}: ${item.name}` : `✨ ${box.name}: ${item.name}`;
+    const detail = u.kind === 'heal'
+      ? `Лечение ${u.dice} → [${roll.rolls.join(', ')}]${roll.mod ? (roll.mod > 0 ? ' + ' : ' − ') + Math.abs(roll.mod) : ''}`
+      : `Урон ${u.type}: ${u.dice} → [${roll.rolls.join(', ')}]${roll.mod ? (roll.mod > 0 ? ' + ' : ' − ') + Math.abs(roll.mod) : ''}${u.save ? ' · ' + u.save : ''}`;
+    announceRoll({ sides: ItemsCore.parseDice(u.dice)?.sides || 6, total: roll.total, mainRolls: roll.rolls, title: label, detail });
+  }
+}
+
+/** Бросок атаки оружием: d20 + бонус атаки, урон (на 20 — кости урона удваиваются). */
+function rollCharacterAttack(charId, slot) {
+  const c = state.characters.find(x => x.id === charId);
+  if (!c) return;
+  const at = ItemsCore.stats(c, state.initRound).attacks.find(a => a.slot === slot);
+  if (!at) return;
+  const d20 = 1 + Math.floor(Math.random() * 20);
+  const crit = d20 === 20, fail = d20 === 1;
+  const dmgRoll = ItemsCore.rollDice(at.dice, crit);
+  const extras = at.extras.map(x => ({ ...x, r: ItemsCore.rollDice(x.dice, crit) }));
+  const dmg = Math.max(1, dmgRoll.total + at.dmgMod) + extras.reduce((s, x) => s + x.r.total, 0);
+  const signed = n => (n >= 0 ? '+' + n : String(n));
+  const parts = [`${at.dice}${crit ? '×2' : ''} [${dmgRoll.rolls.join(', ') || at.dice}]${at.dmgMod ? ' ' + signed(at.dmgMod) : ''} ${at.type}`,
+    ...extras.map(x => `${x.dice}${crit ? '×2' : ''} [${x.r.rolls.join(', ')}] ${x.type}`)];
+  announceRoll({
+    sides: 20, total: d20 + at.toHit, mainRolls: [d20], fixed: at.toHit, modifierStr: signed(at.toHit),
+    isCrit: crit, isFail: fail,
+    title: `⚔ ${c.name}: ${at.name}`,
+    detail: fail ? 'Промах (выпала 1)' : `Урон: ${dmg}${crit ? ' — КРИТ!' : ''} · ${parts.join(' + ')}`
+  });
+  logEvent('combat', `⚔ ${c.name} — ${at.name}: атака ${d20 + at.toHit} (d20=${d20})${fail ? ', промах' : `, урон ${dmg}`}${crit ? ' 🌟 КРИТ' : ''}`);
+}
+
+/** Показать результат у себя и у всех в комнате, записать в историю бросков. */
+function announceRoll(r) {
+  const result = {
+    sides: r.sides, mainRolls: r.mainRolls || [], mainTotal: (r.mainRolls || []).reduce((s, x) => s + x, 0),
+    extraDiceResults: [], fixed: r.fixed || 0, modifierStr: r.modifierStr || '', total: r.total,
+    isCrit: !!r.isCrit, isFail: !!r.isFail, title: r.title, detail: r.detail
+  };
+  showDiceResult(result);
+  state.diceHistory.unshift({ time: Date.now(), sides: result.sides, modStr: result.modifierStr, total: result.total, isCrit: result.isCrit, isFail: result.isFail, title: r.title });
+  if (state.diceHistory.length > 20) state.diceHistory.length = 20;
+  window.DND_ONLINE?.sendDice?.(result);
 }
 
 function invFindItem(ref, itemId) {
@@ -347,12 +522,24 @@ function invGiveLibraryItem(itemId) {
   if (invAction({ type: 'add', to: window._invPickerRef, item, qty })) toast(`${item.icon} ${item.name} ×${qty} выдан`);
 }
 
+// Тип своего предмета → какие поля механики показать
+const CUSTOM_KINDS = [
+  { id: 'none', label: 'Обычный (без механики)' },
+  { id: 'weapon', label: 'Оружие' },
+  { id: 'armor', label: 'Доспех' },
+  { id: 'shield', label: 'Щит' },
+  { id: 'head', label: 'Голова' }, { id: 'neck', label: 'Амулет' }, { id: 'cloak', label: 'Плащ' },
+  { id: 'hands', label: 'Перчатки' }, { id: 'legs', label: 'Штаны' }, { id: 'feet', label: 'Обувь' },
+  { id: 'ring', label: 'Кольцо' },
+  { id: 'heal', label: 'Лечебное (зелье)' },
+];
+
 function invOpenCustomItem(ref) {
   window._invPickerRef = ref;
   invDialog('inv-sub', `
     <div class="modal-title">Свой предмет</div>
     <div class="modal-body inv-form">
-      <label>Название<input id="inv-custom-name" class="input" maxlength="120" placeholder="Например: Письмо барона"></label>
+      <label>Название<input id="inv-custom-name" class="input" maxlength="120" placeholder="Например: Клинок барона"></label>
       <div style="display:flex;gap:8px">
         <label style="width:80px">Значок<input id="inv-custom-icon" class="input" maxlength="4" value="📜"></label>
         <label style="width:90px">Кол-во<input id="inv-custom-qty" class="input" type="number" min="1" value="1"></label>
@@ -360,13 +547,67 @@ function invOpenCustomItem(ref) {
           ${Object.entries(INV_RARITY).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}
         </select></label>
       </div>
-      <label>Описание<textarea id="inv-custom-desc" class="input" rows="3" maxlength="1000" placeholder="Что это, что делает"></textarea></label>
+      <label>Тип<select id="inv-custom-kind" class="input" onchange="invCustomKindChanged()">
+        ${CUSTOM_KINDS.map(k => `<option value="${k.id}">${k.label}</option>`).join('')}
+      </select></label>
+      <div id="inv-custom-mech" class="inv-custom-mech"></div>
+      <label>Описание<textarea id="inv-custom-desc" class="input" rows="2" maxlength="1000" placeholder="История, особые свойства словами"></textarea></label>
     </div>
     <div class="modal-footer inv-footer">
       <button class="btn btn-primary" onclick="invAddCustomItem()">Добавить</button>
       <button class="btn" style="margin-left:auto" onclick="closeInvDialog('inv-sub')">Отмена</button>
     </div>`);
+  invCustomKindChanged();
   document.getElementById('inv-custom-name')?.focus();
+}
+
+function invCustomKindChanged() {
+  const kind = document.getElementById('inv-custom-kind').value;
+  const el = document.getElementById('inv-custom-mech');
+  const num = (id, label, value, w = 90) => `<label style="width:${w}px">${label}<input id="${id}" class="input" type="number" value="${value}"></label>`;
+  const txt = (id, label, value, ph) => `<label style="flex:1">${label}<input id="${id}" class="input" value="${value}" placeholder="${ph || ''}"></label>`;
+  const check = (id, label) => `<label class="inv-check"><input type="checkbox" id="${id}"> ${label}</label>`;
+  let html = '';
+  if (kind === 'weapon') {
+    html = `<div style="display:flex;gap:8px">${txt('cm-dice', 'Урон', '1d8', '1d8')}${txt('cm-type', 'Тип урона', 'рубящий')}${num('cm-bonus', 'Магия +', 0, 70)}</div>
+      <div style="display:flex;gap:8px">${txt('cm-extra', 'Доп. урон', '', '1d6')}${txt('cm-extra-type', 'Его тип', '', 'огнём')}</div>
+      <div class="inv-checks">${check('cm-light', 'лёгкое')}${check('cm-finesse', 'фехтовальное')}${check('cm-two', 'двуручное')}${check('cm-ranged', 'дальнобойное')}</div>`;
+  } else if (kind === 'armor') {
+    html = `<div style="display:flex;gap:8px"><label style="flex:1">Вид<select id="cm-armor" class="input">
+      <option value="light">лёгкий (КД + ЛОВ)</option><option value="medium">средний (КД + ЛОВ, макс. 2)</option><option value="heavy">тяжёлый (без ЛОВ)</option></select></label>
+      ${num('cm-ac', 'КД', 12, 70)}${num('cm-bonus', 'Магия +', 0, 70)}</div>`;
+  } else if (kind === 'shield') {
+    html = `<div style="display:flex;gap:8px">${num('cm-bonus', 'Магия + (к +2 щита)', 0, 160)}</div>`;
+  } else if (kind === 'heal') {
+    html = `<div style="display:flex;gap:8px">${txt('cm-heal', 'Лечит (кости)', '2d4+2', '2d4+2')}</div>`;
+  } else if (kind !== 'none') {
+    html = `<div style="display:flex;gap:8px">${num('cm-ac', 'КД +', 0, 70)}${num('cm-saves', 'Спасброски +', 0, 100)}${num('cm-speed', 'Скорость + (м)', 0, 110)}</div>`;
+  }
+  el.innerHTML = html;
+}
+
+function invCustomMech() {
+  const kind = document.getElementById('inv-custom-kind').value;
+  const v = id => document.getElementById(id)?.value?.trim() || '';
+  const n = id => Math.max(-5, Math.min(10, Math.trunc(Number(v(id))) || 0));
+  const on = id => !!document.getElementById(id)?.checked;
+  const diceOk = d => /^\d*d\d+([+-]\d+)?$/i.test(d);
+  if (kind === 'none') return null;
+  if (kind === 'weapon') {
+    const props = ['light', 'finesse', 'two', 'ranged'].filter(p => on('cm-' + p));
+    const dice = diceOk(v('cm-dice')) ? v('cm-dice') : '1d6';
+    const weapon = { dice, type: v('cm-type') || 'дробящий', props, bonus: n('cm-bonus') };
+    if (diceOk(v('cm-extra'))) weapon.extra = { dice: v('cm-extra'), type: v('cm-extra-type') || 'магией' };
+    return { slot: 'weapon', weapon };
+  }
+  if (kind === 'armor') return { slot: 'chest', armor: { kind: v('cm-armor') || 'light', ac: Math.max(10, Math.min(20, Math.trunc(Number(v('cm-ac'))) || 11)), bonus: n('cm-bonus') } };
+  if (kind === 'shield') return { slot: 'shield', armor: { kind: 'shield', ac: 2, bonus: n('cm-bonus') } };
+  if (kind === 'heal') return { use: { kind: 'heal', dice: diceOk(v('cm-heal')) ? v('cm-heal') : '2d4+2' } };
+  const mods = {};
+  if (n('cm-ac')) mods.ac = n('cm-ac');
+  if (n('cm-saves')) mods.saves = n('cm-saves');
+  if (Number(v('cm-speed'))) mods.speed = Math.max(-9, Math.min(9, Number(v('cm-speed'))));
+  return { slot: kind, mods };
 }
 
 function invAddCustomItem() {
@@ -379,6 +620,8 @@ function invAddCustomItem() {
     rarity: document.getElementById('inv-custom-rarity').value,
     desc: document.getElementById('inv-custom-desc').value.trim()
   };
+  const mech = invCustomMech();
+  if (mech) { mech.desc = item.desc; item.mech = mech; }
   const qty = Math.max(1, Math.floor(Number(document.getElementById('inv-custom-qty').value) || 1));
   if (invAction({ type: 'add', to: window._invPickerRef, item, qty })) closeInvDialog('inv-sub');
 }

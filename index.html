@@ -552,6 +552,17 @@
         <div><label class="label">HP текущее</label><input type="number" id="char-hp-cur" class="input" value="20" min="0"></div>
         <div><label class="label">Уровень</label><input type="number" id="char-level-display" class="input" value="1" readonly></div>
       </div>
+      <div>
+        <label class="label">Характеристики</label>
+        <div class="char-abilities">
+          <label>СИЛ<input type="number" id="char-ab-str" class="input" min="1" max="30" value="10"></label>
+          <label>ЛОВ<input type="number" id="char-ab-dex" class="input" min="1" max="30" value="10"></label>
+          <label>ТЕЛ<input type="number" id="char-ab-con" class="input" min="1" max="30" value="10"></label>
+          <label>ИНТ<input type="number" id="char-ab-int" class="input" min="1" max="30" value="10"></label>
+          <label>МДР<input type="number" id="char-ab-wis" class="input" min="1" max="30" value="10"></label>
+          <label>ХАР<input type="number" id="char-ab-cha" class="input" min="1" max="30" value="10"></label>
+        </div>
+      </div>
       <div id="char-progression-note" style="font-size:11px;color:var(--text-2);padding:8px 10px;background:rgba(255,255,255,.03);border-radius:6px;">👑 Мастер управляет опытом, уровнем и максимальным HP.</div>
       <div>
         <label class="label">Изображение</label>
@@ -709,6 +720,7 @@
     <div id="online-view" class="online-view"></div>
   </div>
 </div>
+    <script src="js/shared/items-core.js"></script>
     <script src="js/map/01-state.js"></script>
     <script src="js/map/02-init.js"></script>
     <script src="js/ui/03-sidebar-toggle.js"></script>
@@ -743,6 +755,8 @@
     <script src="js/shared/vision-core.js"></script>
     <script src="js/map/31-inventory.js"></script>
     <script src="js/map/32-vision.js"></script>
+    <script src="js/map/33-arrows.js"></script>
+    <script src="js/map/34-boards.js"></script>
     <script src="api/api.js"></script>
     <script src="js/online/campaigns.js"></script>
     <script src="js/online/realtime.js"></script>

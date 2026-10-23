@@ -35,8 +35,17 @@
       qty: int(qty != null ? qty : raw.qty, 1, MAX_QTY) || 1
     };
     if (raw.custom) item.custom = true;
+    // Механика своего предмета мастера (слот, урон, КД…) — небольшой объект
+    if (raw.mech && typeof raw.mech === 'object') {
+      try { const m = JSON.stringify(raw.mech); if (m.length <= 2000) item.mech = JSON.parse(m); } catch (e) { /* без механики */ }
+    }
+    // У жезлов свои заряды — такие предметы не складываются в стопку
+    const def = Items() && Items().defOf(item);
+    if (def && def.charges) item.charges = int(raw.charges != null ? raw.charges : def.charges, 0, 999);
     return item;
   }
+
+  const Items = () => root.ItemsCore || null;
 
   function normCoins(raw) {
     const c = {};
@@ -71,7 +80,10 @@
     if (ref.kind === 'character') {
       const c = (state.characters || []).find(x => sameId(x.id, ref.id));
       if (!c) return null;
-      return { kind: 'character', id: c.id, ref: { kind: 'character', id: c.id }, name: c.name, icon: c.emoji || '👤', ownerId: c.ownerId, holder: ensureHolder(c) };
+      ensureHolder(c);
+      if (!c.equipment || typeof c.equipment !== 'object' || Array.isArray(c.equipment)) c.equipment = {};
+      if (!Array.isArray(c.effects)) c.effects = [];
+      return { kind: 'character', id: c.id, ref: { kind: 'character', id: c.id }, name: c.name, icon: c.emoji || '👤', ownerId: c.ownerId, holder: c, character: c };
     }
     if (ref.kind === 'token') {
       const t = (state.tokens || []).find(x => sameId(x.id, ref.id));
@@ -108,7 +120,12 @@
 
   function addItem(inventory, item, qty) {
     const n = int(qty != null ? qty : item.qty, 1, MAX_QTY) || 1;
-    const existing = item.custom ? null : inventory.find(e => e.id === item.id && !e.custom);
+    if (item.charges != null) {
+      if (inventory.length + n > MAX_ITEMS) return false;
+      for (let i = 0; i < n; i++) inventory.push({ ...item, qty: 1 });
+      return true;
+    }
+    const existing = item.custom ? null : inventory.find(e => e.id === item.id && !e.custom && e.charges == null);
     if (existing) {
       existing.qty = Math.min(MAX_QTY, (Number(existing.qty) || 0) + n);
       return true;
@@ -294,6 +311,114 @@
         for (const k of COIN_KEYS) if (from.holder.coins[k] < amount[k]) return fail(`Не хватает: ${COIN_NAMES[k].toLowerCase()}`);
         for (const k of COIN_KEYS) { from.holder.coins[k] -= amount[k]; to.holder.coins[k] += amount[k]; }
         result.log = `${from.icon} «${from.name}» → ${to.icon} «${to.name}»: ${formatCoins(amount)}`;
+        break;
+      }
+
+      /* ---------- снаряжение и использование ---------- */
+
+      case 'equip': {
+        const box = resolve(state, action.who);
+        if (!box || box.kind !== 'character') return fail('Надевать вещи может только персонаж');
+        if (!canManage(box, actor)) return fail('Можно распоряжаться только своими вещами');
+        const c = box.character;
+        const item = c.inventory.find(e => e.id === str(action.itemId, 80));
+        if (!item) return fail('Предмет не найден');
+        const plan = Items().planEquip(item, c.equipment, action.slot);
+        if (plan.error) return fail(plan.error);
+        const taken = takeItem(c.inventory, item.id, 1);
+        for (const slot of plan.clear) {
+          if (c.equipment[slot]) { addItem(c.inventory, c.equipment[slot], 1); delete c.equipment[slot]; }
+        }
+        c.equipment[plan.slot] = { ...taken, qty: 1 };
+        result.log = `${box.icon} «${box.name}» надевает ${itemLabel(taken, 1)}`;
+        break;
+      }
+
+      case 'unequip': {
+        const box = resolve(state, action.who);
+        if (!box || box.kind !== 'character') return fail('Не найдено');
+        if (!canManage(box, actor)) return fail('Можно распоряжаться только своими вещами');
+        const c = box.character;
+        const slot = str(action.slot, 20);
+        const item = c.equipment[slot];
+        if (!item) return fail('Слот пуст');
+        if (!addItem(c.inventory, item, 1)) return fail('Рюкзак переполнен');
+        delete c.equipment[slot];
+        result.log = `${box.icon} «${box.name}» снимает ${itemLabel(item, 1)}`;
+        break;
+      }
+
+      case 'use': {
+        const box = resolve(state, action.who);
+        if (!box || box.kind !== 'character') return fail('Использовать предмет может только персонаж');
+        if (!canManage(box, actor)) return fail('Можно использовать только свои вещи');
+        const c = box.character;
+        const id = str(action.itemId, 80);
+        const item = c.inventory.find(e => e.id === id && (e.charges == null || e.charges > 0)) || c.inventory.find(e => e.id === id);
+        if (!item) return fail('Предмет не найден');
+        const def = Items().defOf(item);
+        const u = def && def.use;
+        if (!u) return fail('Этот предмет нельзя использовать — его можно надеть или отдать мастеру');
+        if (def.charges && !(item.charges > 0)) return fail('В жезле не осталось зарядов');
+        const hpMax = Number(c.hpMax) || 0, hpCur = Number(c.hpCur) || 0;
+        if (u.kind === 'revive' && hpCur > 0) return fail('Персонаж жив — свиток возрождения не нужен');
+        if (u.kind === 'heal' && hpCur >= hpMax && hpMax > 0) return fail('Хиты и так полные');
+
+        // Сколько выпало: бросок присылает клиент, сервер проверяет, что он возможен
+        const rolled = () => {
+          const lo = Items().diceMin(u.dice), hi = Items().diceMax(u.dice);
+          const v = Number(action.rolled);
+          return Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.trunc(v))) : Items().rollDice(u.dice).total;
+        };
+        const setHp = v => {
+          c.hpCur = Math.max(0, Math.min(hpMax || v, v));
+          c.hpRev = (Number(c.hpRev) || 0) + 1;
+          for (const t of state.tokens || []) if (t.kind === 'character' && sameId(t.sourceId, c.id)) t.hpCur = c.hpCur;
+        };
+
+        // Расход: заряд жезла или сам предмет
+        if (def.charges) item.charges -= 1;
+        else takeItem(c.inventory, item.id, 1);
+
+        const what = `${item.icon} «${item.name}»`;
+        if (u.kind === 'heal') {
+          const amount = rolled();
+          setHp(hpCur + amount);
+          result.amount = amount;
+          result.log = `${box.icon} «${box.name}» использует ${what}: +${amount} хитов (${c.hpCur}/${hpMax})`;
+        } else if (u.kind === 'revive') {
+          setHp(1);
+          result.log = `${box.icon} «${box.name}» возвращается к жизни: ${what} (1/${hpMax})`;
+        } else if (u.kind === 'spell') {
+          const amount = rolled();
+          result.amount = amount;
+          result.log = `${box.icon} «${box.name}» применяет ${what}: ${amount} урона ${u.type}${u.save ? ` (${u.save})` : ''}`;
+        } else if (u.kind === 'buff') {
+          const round = Number(state.initRound) || 1;
+          const effect = {
+            id: Number(action.logId) || Date.now(), name: str(u.name, 60), icon: item.icon,
+            mods: JSON.parse(JSON.stringify(u.mods || {})), startRound: round,
+            untilRound: u.rounds ? round + u.rounds - 1 : null, duration: u.duration || '', text: u.text || ''
+          };
+          c.effects = c.effects.filter(e => e.name !== effect.name);
+          c.effects.push(effect);
+          result.log = `${box.icon} «${box.name}» использует ${what}: ${effect.name}${effect.duration ? ` на ${effect.duration}` : ''}`;
+        } else {
+          result.log = `${box.icon} «${box.name}» использует ${what}`;
+        }
+        if (def.charges) result.log += ` — зарядов осталось ${item.charges}`;
+        break;
+      }
+
+      case 'effect_remove': {
+        const box = resolve(state, action.who);
+        if (!box || box.kind !== 'character') return fail('Не найдено');
+        if (!canManage(box, actor)) return fail('Снимать эффекты можно только со своего персонажа');
+        const before = box.character.effects.length;
+        const removed = box.character.effects.find(e => sameId(e.id, action.effectId));
+        box.character.effects = box.character.effects.filter(e => !sameId(e.id, action.effectId));
+        if (box.character.effects.length === before) return fail('Эффект не найден');
+        result.log = `${box.icon} «${box.name}»: эффект «${removed.name}» закончился`;
         break;
       }
 

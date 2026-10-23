@@ -149,19 +149,19 @@ export function createPgStore(connectionString) {
 
         async loadRoomState(roomId) {
             if (!/^\d+$/.test(String(roomId))) return null;
-            const r = await query('SELECT state, version, map_src, draw_canvas, fog_canvas, vision_walls FROM room_state WHERE room_id = $1', [roomId]);
+            const r = await query('SELECT state, version, map_src, draw_canvas, fog_canvas, vision_walls, boards FROM room_state WHERE room_id = $1', [roomId]);
             return r.rows[0] || null;
         },
 
         async saveRoomState(roomId, s) {
             await query(
-                `INSERT INTO room_state (room_id, state, version, map_src, draw_canvas, fog_canvas, vision_walls, updated_at)
-                 VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, NOW())
+                `INSERT INTO room_state (room_id, state, version, map_src, draw_canvas, fog_canvas, vision_walls, boards, updated_at)
+                 VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, NOW())
                  ON CONFLICT (room_id) DO UPDATE SET
                    state = EXCLUDED.state, version = EXCLUDED.version, map_src = EXCLUDED.map_src,
                    draw_canvas = EXCLUDED.draw_canvas, fog_canvas = EXCLUDED.fog_canvas,
-                   vision_walls = EXCLUDED.vision_walls, updated_at = NOW()`,
-                [roomId, JSON.stringify(s.state), s.version, s.map_src, s.draw_canvas, s.fog_canvas, s.vision_walls || null]
+                   vision_walls = EXCLUDED.vision_walls, boards = EXCLUDED.boards, updated_at = NOW()`,
+                [roomId, JSON.stringify(s.state), s.version, s.map_src, s.draw_canvas, s.fog_canvas, s.vision_walls || null, s.boards || null]
             );
         }
     };

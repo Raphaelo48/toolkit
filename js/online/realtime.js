@@ -32,7 +32,7 @@
   const isMaster = () => online.meta?.player?.role === 'master';
   const myId = () => online.meta?.player?.id;
   const ready = () => online.connected && online.welcomed;
-  const busy = () => !!(state.draggingToken || state.isDrawing || state.shapeStart);
+  const busy = () => !!(state.draggingToken || state.isDrawing || state.shapeStart || state.arrowMoving);
 
   function send(message){
     if(online.ws && online.ws.readyState === WebSocket.OPEN){
@@ -63,6 +63,7 @@
       shapeSettings:clone(state.shapeSettings),
       party:clone(state.party || {}),
       vision:clone(state.vision || {}),
+      boards:clone(state.boards || []),
       eventLog:clone(state.eventLog),
     };
   }
@@ -226,6 +227,7 @@
       if(Array.isArray(shared.eventLog)) state.eventLog = shared.eventLog;
       if(shared.party && typeof shared.party === 'object') state.party = shared.party;
       if(shared.vision && typeof shared.vision === 'object') state.vision = shared.vision;
+      if(Array.isArray(shared.boards)) state.boards = shared.boards;
       if(shared.inventory) state.inventory = shared.inventory; // старый формат
       window.InventoryCore?.migrate(state);
       if(state.selectedTokenId != null && !state.tokens.some(t => t.id === state.selectedTokenId)) state.selectedTokenId = null;
@@ -233,7 +235,7 @@
       sizeMapLayers();
       renderAll?.(); drawGrid?.(); renderShapes?.(); updateMapTransform?.(); renderLogFilters?.(); renderLog?.();
       window.dndInventoryRefresh?.();
-      window.renderVisionPanel?.(); window.dndVisionRender?.();
+      window.renderVisionPanel?.(); window.dndVisionRender?.(); window.dndBoardsChanged?.();
       online.lastSignature = currentSignature();
     } catch(err){
       console.error('[D&D Online] apply state failed', err);
@@ -295,6 +297,7 @@
     sendCanvasNow('fog');
     const walls = window.visionSaveData?.();
     if(walls) send({ type:'vision_walls', walls });
+    window.dndBoardsResend?.();
     toastSafe('Комната заполнена текущей картой и токенами');
   }
 
@@ -393,6 +396,9 @@
         toastSafe(`⚡ ${e.name}: инициатива ${e.value} (d20 ${e.roll}${sign})`);
         return;
       }
+      case 'board_image':
+        window.dndBoardImage?.(m);
+        return;
       case 'vision_walls':
         window.dndVisionSetWalls?.(m);
         return;
@@ -411,7 +417,9 @@
   /* ---------- API для остального кода ---------- */
 
   online.publishState = publishState;
+  online.flushPending = () => setTimeout(flushPending, 0);
   online.sendCanvas = sendCanvas;
+  online.sendBoardImage = (id, src) => ready() && send({ type:'board_image', id, src });
   online.sendVisionWalls = walls => ready() && send({ type:'vision_walls', walls });
   online.sendInitiativeRoll = (tokenId, mod) => ready() && send({ type:'initiative_roll', tokenId, mod });
   online.inRoom = () => !!online.meta && !!window.dndOnlineGetRole?.();

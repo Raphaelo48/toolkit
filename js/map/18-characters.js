@@ -86,6 +86,9 @@ function openCharacterModal(editId = null) {
     state.modalColors.char = '#7ba3c9';
     resetImagePreview('char-img-preview');
   }
+  // Характеристики (СИЛ, ЛОВ…): от них зависят КД, атака и урон
+  const abil = (editId && state.characters.find(x => x.id === editId)?.abilities) || {};
+  for (const a of ItemsCore.ABILITIES) document.getElementById('char-ab-' + a.id).value = Number(abil[a.id]) || 10;
   updateColorSelection('char-colors', 'char');
   const charRole = window.dndOnlineGetRole?.();
   const progressionLocked = charRole === 'player';
@@ -111,6 +114,8 @@ function confirmAddCharacter() {
   const hpMax = role === 'player' && existingCharacter ? existingCharacter.hpMax : hpMaxInput;
   const hpCur = parseInt(document.getElementById('char-hp-cur').value) || hpMax;
   const emoji = document.getElementById('char-emoji').value.trim();
+  const abilities = {};
+  for (const a of ItemsCore.ABILITIES) abilities[a.id] = Math.max(1, Math.min(30, parseInt(document.getElementById('char-ab-' + a.id).value) || 10));
   const image = state.modalImages.char;
   const color = state.modalColors.char;
 
@@ -121,7 +126,7 @@ function confirmAddCharacter() {
       c.name = name; c.charClass = charClass; c.level = level;
       if (c.hpCur !== Math.min(hpCur, hpMax) || c.hpMax !== hpMax) bumpHp(c);
       c.xp = xp; c.hpMax = hpMax; c.hpCur = Math.min(hpCur, hpMax); c.emoji = emoji;
-      c.image = image; c.color = color;
+      c.image = image; c.color = color; c.abilities = abilities;
       state.tokens.forEach(t => {
         if (t.kind === 'character' && t.sourceId === c.id) {
           t.name = name; t.emoji = emoji; t.image = image;
@@ -138,7 +143,7 @@ function confirmAddCharacter() {
     }
   } else {
     const character = {
-      id: state.nextId++, name, charClass, level, xp, hpMax, hpCur: Math.min(hpCur, hpMax), emoji, image, color,
+      id: state.nextId++, name, charClass, level, xp, hpMax, hpCur: Math.min(hpCur, hpMax), emoji, image, color, abilities,
       kind: 'character',
       ownerId: window.DND_ONLINE?.meta?.player?.id || null
     };
@@ -163,11 +168,11 @@ function deleteCharacter(id) {
   }
   const c = state.characters.find(x => x.id === id);
   if (!c) return;
-  const hasStuff = InventoryCore.countItems(c) > 0 || InventoryCore.hasCoins(c.coins);
+  const hasStuff = InventoryCore.countItems(c) > 0 || InventoryCore.hasCoins(c.coins) || Object.keys(c.equipment || {}).length > 0;
   if (!confirm(`Удалить персонажа «${c.name}»?${hasStuff ? '\nЕго вещи и деньги перейдут на общий склад группы.' : ''}`)) return;
   if (hasStuff) {
     const party = InventoryCore.ensureParty(state);
-    (c.inventory || []).forEach(item => {
+    [...(c.inventory || []), ...Object.values(c.equipment || {})].forEach(item => {
       const same = !item.custom && party.inventory.find(e => e.id === item.id && !e.custom);
       if (same) same.qty += item.qty || 1; else party.inventory.push({ ...item });
     });

@@ -124,116 +124,13 @@ const ATMOSPHERE = {
   ],
 };
 
-const LOOT_CATEGORIES = {
-  all: { label: 'Все', icon: '📦' },
-  potion: { label: 'Зелья', icon: '🧪' },
-  weapon: { label: 'Оружие', icon: '⚔' },
-  armor: { label: 'Доспехи', icon: '🛡' },
-  accessory: { label: 'Амулеты', icon: '💍' },
-  chest: { label: 'Сундуки', icon: '📦' },
-  magic: { label: 'Магия', icon: '✨' },
-  resource: { label: 'Ресурсы', icon: '💰' },
-};
+// Каталог предметов и их механика — в js/shared/items-core.js (общий с сервером)
+const LOOT_CATEGORIES = ItemsCore.CATEGORIES;
 
-const LOOT_ITEMS = [
-  { id: 'potion_healing', name: 'Зелье лечения', icon: '🧪', category: 'potion', rarity: 'common', desc: 'Восстанавливает 2d4+2 HP.' },
-  { id: 'potion_greater_heal', name: 'Зелье большого лечения', icon: '🧪', category: 'potion', rarity: 'uncommon', desc: 'Восстанавливает 4d4+4 HP.' },
-  { id: 'potion_superior_heal', name: 'Зелье превосходного лечения', icon: '🧪', category: 'potion', rarity: 'rare', desc: 'Восстанавливает 8d4+8 HP.' },
-  { id: 'potion_mana', name: 'Зелье маны', icon: '🫧', category: 'potion', rarity: 'common', desc: 'Восстанавливает ячейки заклинаний.' },
-  { id: 'potion_invisibility', name: 'Зелье невидимости', icon: '💨', category: 'potion', rarity: 'rare', desc: 'Делает существо невидимым на 1 час.' },
-  { id: 'potion_speed', name: 'Зелье скорости', icon: '⚡', category: 'potion', rarity: 'very-rare', desc: 'Удваивает скорость на 1 минуту.' },
-  { id: 'potion_fly', name: 'Зелье полёта', icon: '🪽', category: 'potion', rarity: 'uncommon', desc: 'Позволяет летать в течение 1 часа.' },
-  { id: 'potion_poison', name: 'Зелье яда', icon: '☠', category: 'potion', rarity: 'uncommon', desc: '1d10 урона ядом.' },
-  { id: 'sword_long', name: 'Длинный меч', icon: '⚔', category: 'weapon', rarity: 'common', desc: '1d8 рубящий урон.' },
-  { id: 'sword_flame', name: 'Меч пылающего пламени', icon: '🗡', category: 'weapon', rarity: 'rare', desc: '+2d6 урона огнём.' },
-  { id: 'sword_holy', name: 'Святой мститель', icon: '🗡', category: 'weapon', rarity: 'legendary', desc: 'Легендарный меч. +3 к броскам.' },
-  { id: 'bow_long', name: 'Длинный лук', icon: '🏹', category: 'weapon', rarity: 'common', desc: '1d8 колющий урон.' },
-  { id: 'bow_elven', name: 'Эльфийский лук', icon: '🏹', category: 'weapon', rarity: 'rare', desc: '+1 к броскам.' },
-  { id: 'dagger_poison', name: 'Отравленный кинжал', icon: '🗡', category: 'weapon', rarity: 'uncommon', desc: '1d4+доп. яд.' },
-  { id: 'axe_battle', name: 'Боевой топор', icon: '🪓', category: 'weapon', rarity: 'common', desc: '1d8 рубящий урон.' },
-  { id: 'staff_arcane', name: 'Посох тайной магии', icon: '🪄', category: 'weapon', rarity: 'rare', desc: '+1 к спасброскам заклинаний.' },
-  { id: 'crossbow_hand', name: 'Ручной арбалет', icon: '🏹', category: 'weapon', rarity: 'common', desc: '1d6 колющий урон.' },
-  { id: 'hammer_thunder', name: 'Молот грома', icon: '🔨', category: 'weapon', rarity: 'very-rare', desc: 'Оглушает цель на 1 раунд.' },
-  { id: 'armor_chain', name: 'Кольчужная броня', icon: '🛡', category: 'armor', rarity: 'common', desc: 'КД 16.' },
-  { id: 'armor_plate', name: 'Латный доспех', icon: '🛡', category: 'armor', rarity: 'uncommon', desc: 'КД 18.' },
-  { id: 'shield_wooden', name: 'Деревянный щит', icon: '🛡', category: 'armor', rarity: 'common', desc: '+2 к КД.' },
-  { id: 'shield_lion', name: 'Щит львиного рыка', icon: '🛡', category: 'armor', rarity: 'rare', desc: '+2 к КД. Отталкивание.' },
-  { id: 'helmet_dragon', name: 'Шлем драконьей стражи', icon: '⛑', category: 'armor', rarity: 'rare', desc: 'Сопротивление огню.' },
-  { id: 'boots_elven', name: 'Эльфийские сапоги', icon: '👢', category: 'armor', rarity: 'uncommon', desc: 'Бесшумное передвижение.' },
-  { id: 'cloak_protection', name: 'Плащ защиты', icon: '🧥', category: 'armor', rarity: 'rare', desc: '+1 к КД и спасброскам.' },
-  { id: 'gloves_dexterity', name: 'Перчатки ловкости', icon: '🧤', category: 'armor', rarity: 'uncommon', desc: 'Устанавливают ловкость 19.' },
-  { id: 'amulet_health', name: 'Амулет здоровья', icon: '📿', category: 'accessory', rarity: 'uncommon', desc: 'Устанавливает телосложение 19.' },
-  { id: 'amulet_planes', name: 'Амулет межпланарности', icon: '🌀', category: 'accessory', rarity: 'legendary', desc: 'Перемещение между планами.' },
-  { id: 'ring_protection', name: 'Кольцо защиты', icon: '💍', category: 'accessory', rarity: 'rare', desc: '+1 к КД и спасброскам.' },
-  { id: 'ring_invisibility', name: 'Кольцо невидимости', icon: '💍', category: 'accessory', rarity: 'legendary', desc: 'Невидимость по желанию.' },
-  { id: 'ring_regeneration', name: 'Кольцо регенерации', icon: '💍', category: 'accessory', rarity: 'legendary', desc: 'Восстанавливает 1d6 HP каждый ход.' },
-  { id: 'periapt_wound', name: 'Амулет закрытия ран', icon: '📿', category: 'accessory', rarity: 'uncommon', desc: 'Лечение на максимум.' },
-  { id: 'brooch_shielding', name: 'Брошь ограждения', icon: '🔰', category: 'accessory', rarity: 'rare', desc: 'Преимущество на спасброски.' },
-  { id: 'stone_good_luck', name: 'Камень удачи', icon: '🪨', category: 'accessory', rarity: 'legendary', desc: '+1 ко всем проверкам.' },
-  { id: 'chest_wooden', name: 'Деревянный сундук', icon: '📦', category: 'chest', rarity: 'common', desc: 'Обычный сундук.', isLootChest: true, lootPool: 'basic' },
-  { id: 'chest_locked', name: 'Запертый сундук', icon: '🔒', category: 'chest', rarity: 'uncommon', desc: 'Замок (КС 15).', isLootChest: true, lootPool: 'valuable' },
-  { id: 'chest_treasure', name: 'Сундук с сокровищами', icon: '💎', category: 'chest', rarity: 'rare', desc: 'Блестит от золота!', isLootChest: true, lootPool: 'treasure' },
-  { id: 'chest_trapped', name: 'Сундук с ловушкой', icon: '⚠', category: 'chest', rarity: 'rare', desc: 'Осторожно! Ловушка.', isLootChest: true, lootPool: 'trapped' },
-  { id: 'chest_ancient', name: 'Древний сундук', icon: '🗝', category: 'chest', rarity: 'very-rare', desc: 'Покрыт рунами.', isLootChest: true, lootPool: 'ancient' },
-  { id: 'bag_holding', name: 'Сума хранения', icon: '👜', category: 'chest', rarity: 'rare', desc: 'Вмещает до 250 кг.' },
-  { id: 'scroll_fireball', name: 'Свиток огненного шара', icon: '📜', category: 'magic', rarity: 'rare', desc: '8d6 урона огнём.' },
-  { id: 'scroll_resurrection', name: 'Свиток воскрешения', icon: '📜', category: 'magic', rarity: 'legendary', desc: 'Воскрешает существо.' },
-  { id: 'book_spells', name: 'Книга заклинаний', icon: '📕', category: 'magic', rarity: 'rare', desc: '1d4+3 заклинания.' },
-  { id: 'crystal_arcane', name: 'Тайный кристалл', icon: '💠', category: 'magic', rarity: 'uncommon', desc: 'Фокусировка для заклинателей.' },
-  { id: 'orb_dragon', name: 'Драконья сфера', icon: '🔮', category: 'magic', rarity: 'legendary', desc: 'Призывает дракона-призрака.' },
-  { id: 'rune_warding', name: 'Руна ограждения', icon: '🛡', category: 'magic', rarity: 'rare', desc: 'Сигнализирует о проникновении.' },
-  { id: 'wand_magic_missile', name: 'Жезл магической стрелы', icon: '🪄', category: 'magic', rarity: 'uncommon', desc: '3 заряда в день.' },
-  { id: 'gold_pile', name: 'Куча золота', icon: '💰', category: 'resource', rarity: 'common', desc: '50-300 золотых монет.' },
-  { id: 'gems', name: 'Драгоценные камни', icon: '💎', category: 'resource', rarity: 'uncommon', desc: 'Набор из 1d6 камней.' },
-  { id: 'key_iron', name: 'Железный ключ', icon: '🗝', category: 'resource', rarity: 'common', desc: 'Открывает замок.' },
-  { id: 'map_treasure', name: 'Карта сокровищ', icon: '🗺', category: 'resource', rarity: 'uncommon', desc: 'Ведёт к тайнику.' },
-  { id: 'torch', name: 'Факел', icon: '🔥', category: 'resource', rarity: 'common', desc: 'Освещает радиус 6 м.' },
-];
+// desc — понятное описание эффекта, собранное из механики предмета
+const LOOT_ITEMS = ItemsCore.CATALOG.map(i => ({ ...i, desc: ItemsCore.describe(i) }));
 
-const LOOT_POOLS = {
-  basic: [
-    { itemId: 'gold_pile', chance: 0.8, qty: [1, 2] },
-    { itemId: 'torch', chance: 0.5, qty: [1, 3] },
-    { itemId: 'key_iron', chance: 0.3, qty: [1, 1] },
-    { itemId: 'potion_healing', chance: 0.4, qty: [1, 2] },
-  ],
-  valuable: [
-    { itemId: 'gold_pile', chance: 1.0, qty: [2, 4] },
-    { itemId: 'gems', chance: 0.7, qty: [1, 3] },
-    { itemId: 'potion_healing', chance: 0.6, qty: [1, 2] },
-    { itemId: 'potion_greater_heal', chance: 0.3, qty: [1, 1] },
-    { itemId: 'scroll_fireball', chance: 0.2, qty: [1, 1] },
-    { itemId: 'ring_protection', chance: 0.15, qty: [1, 1] },
-  ],
-  treasure: [
-    { itemId: 'gold_pile', chance: 1.0, qty: [3, 6] },
-    { itemId: 'gems', chance: 1.0, qty: [2, 5] },
-    { itemId: 'potion_greater_heal', chance: 0.5, qty: [1, 2] },
-    { itemId: 'potion_superior_heal', chance: 0.3, qty: [1, 1] },
-    { itemId: 'sword_flame', chance: 0.2, qty: [1, 1] },
-    { itemId: 'amulet_health', chance: 0.25, qty: [1, 1] },
-    { itemId: 'scroll_resurrection', chance: 0.1, qty: [1, 1] },
-  ],
-  trapped: [
-    { itemId: 'gold_pile', chance: 1.0, qty: [2, 5] },
-    { itemId: 'gems', chance: 0.8, qty: [2, 4] },
-    { itemId: 'potion_greater_heal', chance: 0.5, qty: [1, 2] },
-    { itemId: 'sword_holy', chance: 0.1, qty: [1, 1] },
-    { itemId: 'ring_regeneration', chance: 0.1, qty: [1, 1] },
-    { itemId: 'stone_good_luck', chance: 0.08, qty: [1, 1] },
-  ],
-  ancient: [
-    { itemId: 'gold_pile', chance: 1.0, qty: [5, 10] },
-    { itemId: 'gems', chance: 1.0, qty: [4, 8] },
-    { itemId: 'potion_superior_heal', chance: 0.7, qty: [1, 2] },
-    { itemId: 'potion_speed', chance: 0.5, qty: [1, 1] },
-    { itemId: 'sword_holy', chance: 0.25, qty: [1, 1] },
-    { itemId: 'ring_invisibility', chance: 0.2, qty: [1, 1] },
-    { itemId: 'amulet_planes', chance: 0.15, qty: [1, 1] },
-    { itemId: 'orb_dragon', chance: 0.1, qty: [1, 1] },
-    { itemId: 'stone_good_luck', chance: 0.2, qty: [1, 1] },
-  ],
-};
+const LOOT_POOLS = ItemsCore.POOLS;
 
 const RANDOM_TABLES = {
   // group: кто появляется; count — сколько (бросок костей или число)

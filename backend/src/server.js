@@ -272,6 +272,7 @@ async function authenticate(ws, roomId, playerId, token) {
         if (room.canvases[canvasType]) room.send(ws, { type: 'canvas_update', canvasType, canvas: room.canvases[canvasType] });
     }
     room.sendWalls(ws);
+    room.sendBoards(ws);
     room.sendSnapshot(ws, { initial: true });
     notifyPlayers(roomId);
     return ctx;
@@ -352,6 +353,16 @@ function onMessage(ws, ctx, raw) {
                 if (!room.setWalls(message.walls || null)) return deny('Не удалось сохранить стены');
                 for (const client of room.clients) if (client !== ws) room.sendWalls(client);
                 room.broadcastSnapshot({ from: playerId });
+            });
+            return;
+
+        // Холсты для просмотра: картинка мира, области и т.п. (список — в state.boards у мастера)
+        case 'board_image':
+            if (role !== 'master') return deny('Холсты добавляет только мастер.');
+            room.run(() => {
+                const src = typeof message.src === 'string' && message.src.startsWith('data:image/') ? message.src : null;
+                if (!room.setBoardImage(message.id, src)) return;
+                room.broadcast({ type: 'board_image', id: String(message.id), src }, ws);
             });
             return;
 
