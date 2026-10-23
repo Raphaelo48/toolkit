@@ -19,30 +19,62 @@ function boardsList() {
 
 const boardsMaster = () => !isPlayerRole();
 
-/* ───────── вкладки ───────── */
+/* ───────── переключатель в верхней панели ───────── */
+// Переключатель живёт в верхней панели, а не на карте — поверх карты ничего не мешает рисовать.
 
 function renderBoardTabs() {
-  let bar = document.getElementById('board-tabs');
-  if (!bar) {
-    bar = document.createElement('div');
-    bar.id = 'board-tabs';
-    bar.className = 'board-tabs';
-    document.getElementById('map-area').appendChild(bar);
-  }
+  const btn = document.getElementById('boards-btn');
+  if (!btn) return;
   const list = boardsList();
   if (BOARDS.current && !list.some(b => b.id === BOARDS.current)) BOARDS.current = null;
-  const tab = (id, label, title) => {
-    const active = (BOARDS.current || null) === id;
-    const fresh = id && !active && !BOARDS.seen.has(id) && isPlayerRole();
-    return `<button class="board-tab ${active ? 'active' : ''}" title="${escapeHtml(title || label)}" onclick="openBoard(${id ? `'${id}'` : 'null'})">
-      ${escapeHtml(label)}${fresh ? '<span class="board-new"></span>' : ''}</button>`;
-  };
-  bar.style.display = list.length || boardsMaster() ? 'flex' : 'none';
-  bar.innerHTML = tab(null, '⚔ Игровая карта', 'Здесь идёт игра: фишки, туман, бой') +
-    list.map(b => tab(b.id, '🗺 ' + b.name, b.name + ' — только просмотр')).join('') +
-    (boardsMaster() ? `<button class="board-tab board-add" title="Добавить холст: карту мира, область, рисунок" onclick="addBoard()">＋ Холст</button>` : '');
+  const cur = list.find(b => b.id === BOARDS.current);
+  const fresh = isPlayerRole() && list.some(b => !BOARDS.seen.has(b.id) && b.id !== BOARDS.current);
+  btn.style.display = list.length || boardsMaster() ? '' : 'none';
+  btn.classList.toggle('viewing', !!cur);
+  btn.innerHTML = `${cur ? '🗺 ' + escapeHtml(cur.name) : '⚔ Игровая карта'} <span class="boards-caret">▾</span>${fresh ? '<span class="board-new"></span>' : ''}`;
+  btn.title = cur ? 'Сейчас открыт холст для просмотра. Нажмите, чтобы вернуться к игровой карте или выбрать другой холст' : 'Холсты: карта мира, области — только для просмотра';
+  if (document.getElementById('boards-menu')) renderBoardsMenu();
 }
 window.renderBoardTabs = renderBoardTabs;
+
+function toggleBoardsMenu(e) {
+  e?.stopPropagation();
+  if (document.getElementById('boards-menu')) { closeBoardsMenu(); return; }
+  const menu = document.createElement('div');
+  menu.id = 'boards-menu';
+  menu.className = 'boards-menu';
+  document.body.appendChild(menu);
+  renderBoardsMenu();
+  setTimeout(() => document.addEventListener('mousedown', boardsMenuOutside), 0);
+}
+
+function boardsMenuOutside(e) {
+  if (!e.target.closest('#boards-menu, #boards-btn')) closeBoardsMenu();
+}
+
+function closeBoardsMenu() {
+  document.getElementById('boards-menu')?.remove();
+  document.removeEventListener('mousedown', boardsMenuOutside);
+}
+
+function renderBoardsMenu() {
+  const menu = document.getElementById('boards-menu');
+  const btn = document.getElementById('boards-btn');
+  if (!menu || !btn) return;
+  const r = btn.getBoundingClientRect();
+  menu.style.left = r.left + 'px';
+  menu.style.top = (r.bottom + 6) + 'px';
+  const item = (id, label, note) => {
+    const active = (BOARDS.current || null) === id;
+    const fresh = id && !active && !BOARDS.seen.has(id) && isPlayerRole();
+    return `<button class="boards-item ${active ? 'active' : ''}" onclick="openBoard(${id ? `'${id}'` : 'null'}); closeBoardsMenu()">
+      <span>${escapeHtml(label)}</span>${fresh ? '<span class="board-new-inline">новый</span>' : ''}<small>${note}</small></button>`;
+  };
+  const list = boardsList();
+  menu.innerHTML = item(null, '⚔ Игровая карта', 'фишки, бой, туман') +
+    (list.length ? '<div class="boards-sep"></div>' + list.map(b => item(b.id, '🗺 ' + b.name, 'только просмотр')).join('') : '') +
+    (boardsMaster() ? `<div class="boards-sep"></div><button class="boards-item boards-add" onclick="closeBoardsMenu(); addBoard()"><span>＋ Добавить холст</span><small>карта мира, область, рисунок</small></button>` : '');
+}
 
 /* ───────── просмотр ───────── */
 
@@ -56,6 +88,7 @@ function boardViewer() {
     <img id="board-image" draggable="false" alt="">
     <div class="board-empty" id="board-empty">Картинка загружается…</div>
     <div class="board-toolbar">
+      <button class="btn btn-sm btn-primary" onclick="openBoard(null)" title="Вернуться к игровой карте">⚔ К игре</button>
       <span class="board-title" id="board-title"></span>
       <button class="btn btn-sm" onclick="boardZoom(1.2)" title="Приблизить">＋</button>
       <button class="btn btn-sm" onclick="boardZoom(1 / 1.2)" title="Отдалить">－</button>
@@ -221,7 +254,7 @@ window.dndBoardsChanged = function () {
   const now = boardsList().map(b => b.id);
   if (BOARDS.known && isPlayerRole()) {
     const added = boardsList().filter(b => !before.has(b.id));
-    if (added.length) toast(`🗺 Мастер добавил холст «${added[0].name}» — вкладка над картой`);
+    if (added.length) toast(`🗺 Мастер добавил холст «${added[0].name}» — кнопка «⚔ Игровая карта» вверху`);
   }
   BOARDS.known = now;
   if (BOARDS.current && !now.includes(BOARDS.current)) openBoard(null);
@@ -250,3 +283,4 @@ function boardsLoadData(images) {
 }
 
 window.addEventListener('DOMContentLoaded', () => { boardViewer().style.display = 'none'; renderBoardTabs(); });
+window.addEventListener('resize', () => renderBoardsMenu());

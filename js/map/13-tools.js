@@ -28,6 +28,13 @@ function updateDrawBarVisibility() {
   const opacityDivider = document.getElementById('draw-opacity-divider');
   const shapeTypeLabel = document.getElementById('shape-type-label');
   const shapeLayerLabel = document.getElementById('shape-layer-label');
+  // Для кисти стен цвет не нужен — только размер
+  const colorLabel = document.getElementById('draw-color')?.closest('label');
+  const wallBrush = ['vwall', 'vfloor'].includes(state.tool);
+  if (colorLabel) {
+    colorLabel.style.display = wallBrush ? 'none' : '';
+    if (colorLabel.nextElementSibling?.classList.contains('divider-v')) colorLabel.nextElementSibling.style.display = wallBrush ? 'none' : '';
+  }
   const isFog = state.tool === 'fog';
   const isShape = state.tool === 'shape';
   opacityLabel.style.display = isFog ? 'flex' : 'none';

@@ -38,7 +38,9 @@
     grid-area: topbar; background: var(--bg-1);
     border-bottom: 1px solid var(--border);
     display: flex; align-items: center; padding: 0 16px; gap: 12px;
+    overflow-x: auto; scrollbar-width: thin; /* узкий экран: панель прокручивается, кнопки не обрезаются */
   }
+  .topbar > * { flex-shrink: 0; }
   .logo {
     font-family: 'Cormorant Garamond', serif; font-weight: 500; font-size: 20px;
     color: var(--text-0); letter-spacing: -0.01em;
@@ -625,12 +627,18 @@ body:not(.role-player) .player-only, body:not(.role-player) .player-only-inline 
 .token.bumped { box-shadow: 0 0 0 3px rgba(201, 120, 120, 0.85), 0 3px 8px rgba(0,0,0,0.4); }
 
 /* ===== Холсты для просмотра ===== */
-.board-tabs { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; gap: 4px; padding: 4px; background: rgba(21,18,14,0.88); border: 1px solid var(--border); border-radius: 8px; max-width: calc(100% - 24px); overflow-x: auto; }
-.board-tab { position: relative; background: transparent; border: 1px solid transparent; color: var(--text-1); padding: 5px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; white-space: nowrap; font-family: inherit; }
-.board-tab:hover { background: var(--bg-3); color: var(--text-0); }
-.board-tab.active { background: var(--accent-bg-strong); border-color: var(--accent); color: var(--accent); }
-.board-tab.board-add { color: var(--text-2); border-style: dashed; border-color: var(--border-strong); }
-.board-new { position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.boards-btn { position: relative; }
+.boards-btn.viewing { border-color: var(--accent); color: var(--accent); background: var(--accent-bg-strong); }
+.boards-caret { font-size: 9px; opacity: .7; margin-left: 2px; }
+.board-new { position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg-1); }
+.boards-menu { position: fixed; z-index: 10000; min-width: 230px; max-width: 320px; max-height: 70vh; overflow-y: auto; padding: 6px; background: var(--bg-1); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 16px 40px rgba(0,0,0,.5); display: flex; flex-direction: column; gap: 2px; }
+.boards-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left; background: transparent; border: 1px solid transparent; color: var(--text-0); padding: 7px 10px; border-radius: 7px; cursor: pointer; font-family: inherit; font-size: 13px; position: relative; }
+.boards-item small { font-size: 10px; color: var(--text-2); }
+.boards-item:hover { background: var(--bg-3); }
+.boards-item.active { background: var(--accent-bg-strong); border-color: var(--accent); color: var(--accent); }
+.boards-item.boards-add { color: var(--text-1); }
+.board-new-inline { position: absolute; right: 10px; top: 9px; font-size: 9px; padding: 1px 6px; border-radius: 999px; background: var(--accent); color: var(--bg-0); }
+.boards-sep { height: 1px; background: var(--border); margin: 4px 2px; }
 .board-viewer { position: absolute; inset: 0; z-index: 55; background: var(--bg-0); overflow: hidden; cursor: grab; display: none; }
 .board-viewer.panning { cursor: grabbing; }
 .board-viewer img { position: absolute; top: 0; left: 0; transform-origin: 0 0; user-select: none; pointer-events: none; }
