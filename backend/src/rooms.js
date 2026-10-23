@@ -34,7 +34,7 @@ const GM_ONLY_TOKEN_KINDS = new Set(['hidden', 'trap']);
 // Эти поля персонажа меняет только мастер
 const MASTER_ONLY_CHARACTER_FIELDS = ['xp', 'level', 'hpMax', 'visionRadius'];
 // Эти поля меняются только действиями инвентаря на сервере — никакой снимок их не перезапишет
-const SERVER_OWNED_CHARACTER_FIELDS = ['inventory', 'coins', 'equipment', 'effects', 'inspiration'];
+const SERVER_OWNED_CHARACTER_FIELDS = ['inventory', 'coins', 'equipment', 'effects', 'inspiration', 'lastUse'];
 const SERVER_OWNED_TOKEN_FIELDS = ['inventory', 'coins', 'contents', 'item', 'qty', 'inspirationGiven'];
 const ACTION_HISTORY_LIMIT = 300;
 
@@ -659,13 +659,22 @@ function keepServerOwned(next, current) {
     const nextChars = Array.isArray(next.characters) ? next.characters : [];
     const nextTokens = Array.isArray(next.tokens) ? next.tokens : [];
 
+    const freshHp = new Map();
     for (const c of nextChars) {
         const cur = curChars.get(String(c.id));
-        if (cur) copyFields(c, cur, SERVER_OWNED_CHARACTER_FIELDS);
+        if (!cur) continue;
+        copyFields(c, cur, SERVER_OWNED_CHARACTER_FIELDS);
+        // Хиты изменились на сервере (зелье, переброс, игрок) позже, чем мастер их видел, — не затираем
+        if ((Number(cur.hpRev) || 0) > (Number(c.hpRev) || 0)) {
+            c.hpCur = cur.hpCur; c.hpRev = cur.hpRev;
+            freshHp.set(String(c.id), c.hpCur);
+            changed = true;
+        }
     }
     for (const t of nextTokens) {
         const cur = curTokens.get(String(t.id));
         if (cur) copyFields(t, cur, SERVER_OWNED_TOKEN_FIELDS);
+        if (t?.kind === 'character' && freshHp.has(String(t.sourceId))) t.hpCur = freshHp.get(String(t.sourceId));
     }
     next.party = clone(current.party) || next.party || {};
     Inv.ensureParty(next);

@@ -95,7 +95,40 @@ function rollSelectedDice() {
   window.dndOnlineSync?.('dice_roll');
 }
 
-function showDiceResult(result) {
+// Что показано в окне кубика — от этого зависит кнопка «Перебросить»:
+//   null — свой обычный бросок мастера (переброс бесплатный);
+//   item / attack / request — бросок персонажа: переброс стоит вдохновение;
+//   view — чужой бросок: перебрасывать нечего.
+let DICE_CTX = null;
+
+function diceCtxCharacter(ctx) {
+  return ctx?.charId != null ? state.characters.find(c => String(c.id) === String(ctx.charId)) || null : null;
+}
+
+function updateDiceRerollButton() {
+  const btn = document.getElementById('dice-reroll-btn');
+  if (!btn) return;
+  const ctx = DICE_CTX;
+  btn.disabled = false; btn.title = '';
+  if (!ctx) {
+    btn.style.display = isPlayerRole() ? 'none' : '';
+    btn.textContent = '🔄 Перебросить';
+    return;
+  }
+  if (ctx.type === 'view') { btn.style.display = 'none'; return; }
+  // Мастер перебрасывает атаку своей фишки бесплатно (у него нет ограничения «раз в ход»)
+  if (ctx.type === 'attack' && !isPlayerRole()) { btn.style.display = ''; btn.textContent = '🔄 Перебросить'; return; }
+  const c = diceCtxCharacter(ctx);
+  const insp = Number(c?.inspiration) || 0;
+  btn.style.display = '';
+  btn.textContent = `✨ Перебросить (вдохновение: ${insp})`;
+  if (insp <= 0) { btn.disabled = true; btn.title = 'Перебросить можно только за вдохновение — у персонажа его нет'; }
+}
+window.updateDiceRerollButton = updateDiceRerollButton;
+
+function showDiceResult(result, ctx) {
+  DICE_CTX = ctx || null;
+  updateDiceRerollButton();
   const modal = document.getElementById('dice-modal');
   const icon = document.getElementById('dice-result-icon');
   const total = document.getElementById('dice-result-total');
@@ -146,6 +179,11 @@ function showDiceResult(result) {
 }
 
 function rerollLastDice() {
+  const ctx = DICE_CTX;
+  if (ctx?.type === 'item') { invRerollItem(ctx.ref); return; }
+  if (ctx?.type === 'attack') { rollCharacterAttack(ctx.charId, ctx.slot); return; }
+  if (ctx?.type === 'request') { rollsDoRoll(ctx.id, ctx.charId); return; }
+  if (ctx?.type === 'view') return;
   if (isPlayerRole()) { toast('Кубики бросаются по запросу мастера — смотрите панель справа'); return; }
   if (!state.lastDiceRoll) { rollSelectedDice(); return; }
   const result = performRoll(state.lastDiceRoll.sides, state.lastDiceRoll.modStr);

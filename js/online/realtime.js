@@ -236,7 +236,7 @@
       sizeMapLayers();
       renderAll?.(); drawGrid?.(); renderShapes?.(); updateMapTransform?.(); renderLogFilters?.(); renderLog?.();
       window.dndInventoryRefresh?.();
-      window.renderVisionPanel?.(); window.dndVisionRender?.(); window.dndBoardsChanged?.(); window.renderRollRequests?.();
+      window.renderVisionPanel?.(); window.dndVisionRender?.(); window.dndBoardsChanged?.(); window.renderRollRequests?.(); window.updateDiceRerollButton?.();
       online.lastSignature = currentSignature();
     } catch(err){
       console.error('[D&D Online] apply state failed', err);
@@ -325,13 +325,17 @@
     // Бросок сделал сервер (по запросу мастера, атака): история и журнал придут в снимке состояния
     if(m.serverRoll){
       // Чужой бросок по запросу — короткое уведомление (итоги у мастера в панели), свой — окно с кубиком
-      if(m.fromRequest && String(m.from) !== String(online.meta?.player?.id)){ toast?.(`${r.title} = ${r.total}${r.isCrit ? ' 🌟' : r.isFail ? ' 💀' : ''}`); return; }
-      showDiceResult?.(r); return;
+      const mine = String(m.from) === String(online.meta?.player?.id);
+      if(m.fromRequest && !mine){ toast?.(`${r.title} = ${r.total}${r.isCrit ? ' 🌟' : r.isFail ? ' 💀' : ''}`); return; }
+      const ctx = !mine ? { type:'view' }
+        : m.fromRequest ? { type:'request', id:m.requestId, charId:m.charId }
+        : m.attack ? { type:'attack', charId:m.attack.charId, slot:m.attack.slot } : { type:'view' };
+      showDiceResult?.(r, ctx); return;
     }
     state.diceHistory.unshift({ time:r.time || Date.now(), sides:r.sides, modStr:r.modifierStr || r.modStr || '', total:r.total, isCrit:!!r.isCrit, isFail:!!r.isFail, playerName:m.playerName || 'Игрок' });
     if(state.diceHistory.length > 20) state.diceHistory.length = 20;
     if(Number(m.version) > online.version && !online.pending) online.version = Number(m.version);
-    showDiceResult?.(r);
+    showDiceResult?.(r, { type:'view' });
     const mod = r.modifierStr || r.modStr || '';
     online.applyingRemote = true;
     try{ logEvent?.('dice', `🎲 ${m.playerName || 'Игрок'}: d${r.sides} = ${r.total}${mod ? ` (${mod})` : ''}`); }

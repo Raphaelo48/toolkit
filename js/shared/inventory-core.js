@@ -395,9 +395,16 @@
         else takeItem(c.inventory, item.id, 1);
 
         const what = `${item.icon} «${item.name}»`;
+        // Последний бросок предмета: его можно перебросить за вдохновение (результат заменяется)
+        const remember = (amount, applied) => {
+          c.lastUse = { id: Number(action.logId) || Date.now(), itemId: item.id, name: str(item.name, 60), icon: item.icon || '',
+            kind: u.kind, dice: u.dice, type: u.type || '', save: u.save || '', amount, applied, rerolls: 0 };
+        };
+        if (u.kind === 'heal' || u.kind === 'spell') delete c.lastUse;
         if (u.kind === 'heal') {
           const amount = rolled();
           setHp(hpCur + amount);
+          remember(amount, c.hpCur - hpCur);
           result.amount = amount;
           result.log = `${box.icon} «${box.name}» использует ${what}: +${amount} хитов (${c.hpCur}/${hpMax})`;
         } else if (u.kind === 'revive') {
@@ -405,6 +412,7 @@
           result.log = `${box.icon} «${box.name}» возвращается к жизни: ${what} (1/${hpMax})`;
         } else if (u.kind === 'spell') {
           const amount = rolled();
+          remember(amount, 0);
           result.amount = amount;
           result.log = `${box.icon} «${box.name}» применяет ${what}: ${amount} урона ${u.type}${u.save ? ` (${u.save})` : ''}`;
         } else if (u.kind === 'buff') {
@@ -421,6 +429,38 @@
           result.log = `${box.icon} «${box.name}» использует ${what}`;
         }
         if (def.charges) result.log += ` — зарядов осталось ${item.charges}`;
+        break;
+      }
+
+      // Переброс последнего зелья/свитка за вдохновение: новый результат заменяет прежний
+      case 'use_reroll': {
+        const box = resolve(state, action.who);
+        if (!box || box.kind !== 'character') return fail('Персонаж не найден');
+        if (!canManage(box, actor)) return fail('Перебросить можно только за своего персонажа');
+        const c = box.character;
+        const last = c.lastUse;
+        if (!last || (action.useId != null && Number(action.useId) !== Number(last.id))) return fail('Перебросить можно только последний предмет');
+        const insp = int(c.inspiration, 0, 99);
+        if (insp <= 0) return fail('Перебросить можно только за вдохновение — его нет');
+        const lo = Items().diceMin(last.dice), hi = Items().diceMax(last.dice);
+        const v = Number(action.rolled);
+        const amount = Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.trunc(v))) : Items().rollDice(last.dice).total;
+        c.inspiration = insp - 1;
+        const what = `${last.icon} «${last.name}»`;
+        if (last.kind === 'heal') {
+          const hpMax = Number(c.hpMax) || 0;
+          const base = Math.max(0, (Number(c.hpCur) || 0) - (Number(last.applied) || 0)); // убрать прежнее лечение
+          c.hpCur = Math.max(0, Math.min(hpMax || base + amount, base + amount));
+          c.hpRev = (Number(c.hpRev) || 0) + 1;
+          for (const t of state.tokens || []) if (t.kind === 'character' && sameId(t.sourceId, c.id)) t.hpCur = c.hpCur;
+          result.log = `✨ «${box.name}» перебрасывает ${what} за вдохновение: +${amount} хитов вместо +${last.amount} (${c.hpCur}/${hpMax})`;
+          last.applied = c.hpCur - base;
+        } else {
+          result.log = `✨ «${box.name}» перебрасывает ${what} за вдохновение: ${amount} урона ${last.type} вместо ${last.amount}`;
+        }
+        last.amount = amount;
+        last.rerolls = (last.rerolls || 0) + 1;
+        result.amount = amount;
         break;
       }
 

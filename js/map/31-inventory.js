@@ -60,7 +60,7 @@ function invAction(action) {
 function invRerender() {
   renderTokens?.(); renderInfoPanel?.(); renderCharactersList?.(); renderMonstersList?.();
   renderLogFilters?.(); renderLog?.();
-  invRefresh();
+  invRefresh(); window.updateDiceRerollButton?.();
 }
 
 /** Перерисовать открытое окно инвентаря (вызывается и при приходе состояния с сервера). */
@@ -306,8 +306,26 @@ function invUseItem(ref, itemId) {
     const detail = u.kind === 'heal'
       ? `Лечение ${u.dice} → [${roll.rolls.join(', ')}]${roll.mod ? (roll.mod > 0 ? ' + ' : ' − ') + Math.abs(roll.mod) : ''}`
       : `Урон ${u.type}: ${u.dice} → [${roll.rolls.join(', ')}]${roll.mod ? (roll.mod > 0 ? ' + ' : ' − ') + Math.abs(roll.mod) : ''}${u.save ? ' · ' + u.save : ''}`;
-    announceRoll({ sides: ItemsCore.parseDice(u.dice)?.sides || 6, total: roll.total, mainRolls: roll.rolls, title: label, detail, fromItem: true });
+    announceRoll({ sides: ItemsCore.parseDice(u.dice)?.sides || 6, total: roll.total, mainRolls: roll.rolls, title: label, detail, fromItem: true },
+      box.kind === 'character' ? { type: 'item', ref, charId: box.character.id } : { type: 'view' });
   }
+}
+
+/** Переброс последнего зелья/свитка персонажа за вдохновение: результат заменяет прежний (хиты пересчитываются). */
+function invRerollItem(ref) {
+  const box = invBox(ref);
+  const c = box?.character;
+  const last = c?.lastUse;
+  if (!last) { toast('Перебрасывать нечего', 'error'); return; }
+  if (!(Number(c.inspiration) > 0)) { toast('Перебросить можно только за вдохновение — его нет', 'error'); return; }
+  const roll = ItemsCore.rollDice(last.dice);
+  if (!invAction({ type: 'use_reroll', who: ref, useId: last.id, rolled: roll.total })) return;
+  const mod = roll.mod ? (roll.mod > 0 ? ' + ' : ' − ') + Math.abs(roll.mod) : '';
+  const detail = last.kind === 'heal'
+    ? `Лечение ${last.dice} → [${roll.rolls.join(', ')}]${mod} · хиты ${c.hpCur}/${c.hpMax} · вдохновения осталось ${c.inspiration}`
+    : `Урон ${last.type}: ${last.dice} → [${roll.rolls.join(', ')}]${mod}${last.save ? ' · ' + last.save : ''} · вдохновения осталось ${c.inspiration}`;
+  announceRoll({ sides: ItemsCore.parseDice(last.dice)?.sides || 6, total: roll.total, mainRolls: roll.rolls,
+    title: `✨ ${box.name}: ${last.name} — переброс`, detail, fromItem: true }, { type: 'item', ref, charId: c.id });
 }
 
 /** Бросок атаки оружием: d20 + бонус атаки, урон (на 20 — кости урона удваиваются). */
@@ -325,18 +343,18 @@ function rollCharacterAttack(charId, slot) {
   announceRoll({
     sides: 20, total: r.total, mainRolls: [r.d20], fixed: r.toHit, modifierStr: signed(r.toHit),
     isCrit: r.crit, isFail: r.fail, title: `⚔ ${c.name}: ${r.name}`, detail: r.detail
-  });
+  }, { type: 'attack', charId, slot });
   logEvent('combat', `⚔ ${c.name} — ${r.name}: атака ${r.total} (d20=${r.d20})${r.fail ? ', промах' : `, урон ${r.damage}`}${r.crit ? ' 🌟 КРИТ' : ''}`);
 }
 
 /** Показать результат у себя и у всех в комнате, записать в историю бросков. */
-function announceRoll(r) {
+function announceRoll(r, ctx) {
   const result = {
     sides: r.sides, mainRolls: r.mainRolls || [], mainTotal: (r.mainRolls || []).reduce((s, x) => s + x, 0),
     extraDiceResults: [], fixed: r.fixed || 0, modifierStr: r.modifierStr || '', total: r.total,
     isCrit: !!r.isCrit, isFail: !!r.isFail, title: r.title, detail: r.detail, fromItem: !!r.fromItem
   };
-  showDiceResult(result);
+  showDiceResult(result, ctx);
   state.diceHistory.unshift({ time: Date.now(), sides: result.sides, modStr: result.modifierStr, total: result.total, isCrit: result.isCrit, isFail: result.isFail, title: r.title });
   if (state.diceHistory.length > 20) state.diceHistory.length = 20;
   window.DND_ONLINE?.sendDice?.(result);

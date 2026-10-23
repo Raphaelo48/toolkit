@@ -106,9 +106,9 @@ function rollsRememberMod(id) {
   };
 }
 
-function rollsDoRoll(id) {
-  rollsRememberMod(id);
-  const c = rollsMyCharacter();
+function rollsDoRoll(id, charId) {
+  if (document.getElementById('rr-ab-' + id) || !ROLLS.mods[id]) rollsRememberMod(id);
+  const c = (charId != null && state.characters.find(x => String(x.id) === String(charId))) || rollsMyCharacter();
   const { ab, extra } = ROLLS.mods[id];
   const abMod = ab && c ? ItemsCore.stats(c, state.initRound).abilityMods[ab] : 0;
   if (!window.DND_ONLINE?.rollForRequest?.(id, c?.id ?? null, abMod + extra)) toast('Нет связи с сервером', 'error');

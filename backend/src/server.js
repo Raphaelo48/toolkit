@@ -371,7 +371,7 @@ function onMessage(ws, ctx, raw) {
                 if (!res.ok) return room.send(ws, { type: 'action_error', message: res.error });
                 room.pushLog(`${res.roll.title}: ${res.roll.total} (${res.roll.detail})`);
                 room.addDiceRoll({ time: Date.now(), sides: res.roll.sides, modStr: res.roll.modifierStr, total: res.roll.total, isCrit: res.roll.isCrit, isFail: res.roll.isFail, playerName: ctx.name });
-                room.broadcast({ type: 'dice_roll', roll: res.roll, from: playerId, playerName: ctx.name, version: room.version, serverRoll: true, fromRequest: true });
+                room.broadcast({ type: 'dice_roll', roll: res.roll, from: playerId, playerName: ctx.name, version: room.version, serverRoll: true, fromRequest: true, requestId: message.id, charId: message.charId ?? null });
                 room.broadcastSnapshot({ from: playerId });
             });
             return;
@@ -384,7 +384,7 @@ function onMessage(ws, ctx, raw) {
                 if (!res.ok) return room.send(ws, { type: 'action_error', message: res.error });
                 room.pushLog(res.log, 'combat');
                 room.addDiceRoll({ time: Date.now(), sides: 20, modStr: res.roll.modifierStr, total: res.roll.total, isCrit: res.roll.isCrit, isFail: res.roll.isFail, playerName: ctx.name });
-                room.broadcast({ type: 'dice_roll', roll: res.roll, from: playerId, playerName: ctx.name, version: room.version, serverRoll: true });
+                room.broadcast({ type: 'dice_roll', roll: res.roll, from: playerId, playerName: ctx.name, version: room.version, serverRoll: true, attack: { charId: message.charId, slot: String(message.slot || 'mainhand') } });
                 room.broadcastSnapshot({ from: playerId });
             });
             return;

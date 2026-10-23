@@ -771,3 +771,4 @@ body:not(.role-player) .player-only, body:not(.role-player) .player-only-inline 
 .tool-grid .tool-item .tool-key { display: none; }
 .tool-grid .tool-item[data-tool="grid"] .tool-key { display: inline; padding: 0 3px; font-size: 9px; }
 #vision-panel .tool-item { padding: 6px 8px; }
+#dice-modal { z-index: 9500; } /* окно кубика поверх листа персонажа: зелья, атаки, переброс */
